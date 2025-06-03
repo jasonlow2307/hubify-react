@@ -29,6 +29,10 @@ export interface SpotifyArtist {
   images?: SpotifyImage[];
   genres?: string[];
   popularity?: number;
+  followers?: {
+    href: string;
+    total: number;
+  };
 }
 
 export interface SpotifyAlbum {
@@ -86,6 +90,7 @@ export interface AuthContextType {
   login: () => void;
   logout: () => void;
   setToken: (token: string) => void;
+  loading: boolean;
 }
 
 export interface AuthState {

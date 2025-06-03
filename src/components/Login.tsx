@@ -66,7 +66,7 @@ export const Login: React.FC = () => {
           <button
             onClick={login}
             disabled={loading}
-            className="bg-spotify-green hover:bg-green-600 text-black font-bold py-4 px-8 rounded-full text-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="bg-spotify-green hover:bg-green-600 cursor-pointer text-black font-bold py-4 px-8 rounded-full text-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? "Loading..." : "Connect with Spotify"}
           </button>

@@ -6,6 +6,8 @@ import type {
   LeaderboardResponse,
   LeaderboardEntry,
   GameScore,
+  SpotifyArtist,
+  SpotifyTrack,
 } from "../types";
 
 const API_BASE_URL =
@@ -77,6 +79,16 @@ export const spotifyApi = {
     } catch (error) {
       console.error("Error fetching current user:", error);
       throw new Error("Failed to fetch user profile");
+    }
+  },
+
+  getArtist: async (artistId: string): Promise<SpotifyArtist> => {
+    try {
+      const response = await spotifyClient.get(`/artists/${artistId}`);
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching artist details:", error);
+      throw new Error("Failed to fetch artist details");
     }
   },
 
@@ -252,8 +264,147 @@ export const spotifyAuth = {
   },
 };
 
+// Add preview URL finding utilities
+export const previewUrlApi = {
+  // Find preview URL using Spotify search API first, then fallback to serverless function
+  findPreviewUrl: async (
+    artist: string,
+    title: string,
+    album?: string
+  ): Promise<string | null> => {
+    try {
+      // First try Spotify search API
+      const searchQuery = `track:"${title}" artist:"${artist}"${
+        album ? ` album:"${album}"` : ""
+      }`;
+
+      const response = await spotifyClient.get("/search", {
+        params: {
+          q: searchQuery,
+          type: "track",
+          limit: 1,
+        },
+      });
+
+      const tracks = response.data.tracks?.items;
+      if (tracks && tracks.length > 0 && tracks[0].preview_url) {
+        return tracks[0].preview_url;
+      }
+
+      // Fallback to serverless function
+      return await previewUrlApi.findPreviewUrlServerless(artist, title, album);
+    } catch (error) {
+      console.error("Error finding preview URL:", error);
+      // Try serverless function as fallback
+      return await previewUrlApi.findPreviewUrlServerless(artist, title, album);
+    }
+  },
+
+  // Use Vercel serverless function for spotify-preview-finder
+  findPreviewUrlServerless: async (
+    artist: string,
+    title: string,
+    album?: string
+  ): Promise<string | null> => {
+    try {
+      const baseUrl = import.meta.env.VITE_VERCEL_URL || window.location.origin;
+      const response = await axios.post(`${baseUrl}/api/preview`, {
+        artist,
+        title,
+        album,
+      });
+
+      if (response.data.success && response.data.previewUrl) {
+        return response.data.previewUrl;
+      }
+
+      return null;
+    } catch (error) {
+      console.error("Error with serverless preview finder:", error);
+      return null;
+    }
+  },
+
+  // Batch process tracks to find missing preview URLs with rate limiting
+  enhanceTracksWithPreviewUrls: async (
+    tracks: SpotifyTrack[],
+    onProgress?: (processed: number, total: number) => void
+  ): Promise<SpotifyTrack[]> => {
+    const enhancedTracks = [...tracks];
+    const tracksNeedingPreview = tracks
+      .map((track, index) => ({ track, index }))
+      .filter(({ track }) => !track.preview_url);
+
+    if (tracksNeedingPreview.length === 0) {
+      return enhancedTracks;
+    }
+
+    console.log(
+      `Finding preview URLs for ${tracksNeedingPreview.length} tracks...`
+    );
+
+    // Process in batches to respect rate limits
+    const BATCH_SIZE = 5;
+    const DELAY_BETWEEN_BATCHES = 1000; // 1 second
+
+    for (let i = 0; i < tracksNeedingPreview.length; i += BATCH_SIZE) {
+      const batch = tracksNeedingPreview.slice(i, i + BATCH_SIZE);
+
+      // Process batch in parallel
+      const promises = batch.map(async ({ track, index }) => {
+        try {
+          const previewUrl = await previewUrlApi.findPreviewUrl(
+            track.artists[0].name,
+            track.name,
+            track.album.name
+          );
+
+          if (previewUrl) {
+            enhancedTracks[index] = {
+              ...track,
+              preview_url: previewUrl,
+            };
+            console.log(
+              `Found preview URL for: ${track.name} by ${track.artists[0].name}`
+            );
+          }
+        } catch (error) {
+          console.error(`Failed to find preview for ${track.name}:`, error);
+        }
+      });
+
+      await Promise.all(promises);
+
+      // Update progress
+      if (onProgress) {
+        onProgress(
+          Math.min(i + BATCH_SIZE, tracksNeedingPreview.length),
+          tracksNeedingPreview.length
+        );
+      }
+
+      // Delay between batches to respect rate limits
+      if (i + BATCH_SIZE < tracksNeedingPreview.length) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, DELAY_BETWEEN_BATCHES)
+        );
+      }
+    }
+
+    const foundCount = enhancedTracks.filter(
+      (track) => track.preview_url
+    ).length;
+    console.log(
+      `Enhanced ${foundCount}/${tracks.length} tracks with preview URLs`
+    );
+
+    return enhancedTracks;
+  },
+};
+
 export default {
   spotify: spotifyApi,
   backend: backendApi,
   auth: spotifyAuth,
+  preview: previewUrlApi,
 };

@@ -1,29 +1,45 @@
 @import "tailwindcss";
 
-:root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
+@theme {
+  /* Spotify Brand Colors */
+  --color-spotify-black: #191414;
+  --color-spotify-dark-gray: #121212;
+  --color-spotify-gray: #282828;
+  --color-spotify-light-gray: #b3b3b3;
+  --color-spotify-white: #ffffff;
+  --color-spotify-green: #1db954;
 
-  color-scheme: dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #121212;
+  /* Green variations */
+  --color-spotify-green-50: #f0fdf4;
+  --color-spotify-green-100: #dcfce7;
+  --color-spotify-green-200: #bbf7d0;
+  --color-spotify-green-300: #86efac;
+  --color-spotify-green-400: #4ade80;
+  --color-spotify-green-500: #1db954;
+  --color-spotify-green-600: #16a34a;
+  --color-spotify-green-700: #15803d;
+  --color-spotify-green-800: #166534;
+  --color-spotify-green-900: #14532d;
 
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  /* Additional Spotify-inspired colors */
+  --color-spotify-purple: #8b5cf6;
+  --color-spotify-blue: #3b82f6;
+  --color-spotify-yellow: #fbbf24;
+  --color-spotify-red: #ef4444;
 }
 
 body {
   margin: 0;
-  min-width: 320px;
-  min-height: 100vh;
-  background-color: #121212;
-  color: white;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
+    "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--color-spotify-black);
+  color: var(--color-spotify-white);
 }
 
-#root {
-  width: 100%;
-  min-height: 100vh;
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, "Courier New",
+    monospace;
 }

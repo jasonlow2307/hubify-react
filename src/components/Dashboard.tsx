@@ -35,21 +35,26 @@ export const Dashboard: React.FC = () => {
 
         // Determine top artist from top tracks
         const artistCounts: {
-          [key: string]: { count: number; artist: SpotifyArtist };
+          [key: string]: { count: number; artistId: string };
         } = {};
+
         topTracksData.items.forEach((track) => {
           const artist = track.artists[0];
           if (artistCounts[artist.id]) {
             artistCounts[artist.id].count++;
           } else {
-            artistCounts[artist.id] = { count: 1, artist };
+            artistCounts[artist.id] = { count: 1, artistId: artist.id };
           }
         });
 
         const topArtistEntry = Object.values(artistCounts).reduce(
           (prev, current) => (prev.count > current.count ? prev : current)
         );
-        setTopArtist(topArtistEntry.artist);
+
+        const fullArtistData = await spotifyApi.getArtist(
+          topArtistEntry.artistId
+        );
+        setTopArtist(fullArtistData);
       } catch (error) {
         console.error("Error fetching data:", error);
       } finally {
@@ -81,7 +86,8 @@ export const Dashboard: React.FC = () => {
         <p className="text-spotify-lightgray">
           Here's your music overview and available games
         </p>
-      </div>{" "}
+      </div>
+
       {/* Games Section */}
       <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <div
@@ -152,6 +158,7 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
       </div>
+
       {/* Music Stats */}
       <div className="grid lg:grid-cols-3 gap-8">
         {/* Top Artist */}
@@ -163,14 +170,35 @@ export const Dashboard: React.FC = () => {
                 Your Top Artist
               </h3>
             </div>
-            {topArtist.images && topArtist.images[0] && (
-              <img
-                src={topArtist.images[0].url}
-                alt={topArtist.name}
-                className="w-full h-48 object-cover rounded-lg mb-4"
-              />
-            )}
-            <h4 className="text-xl font-bold text-white">{topArtist.name}</h4>
+            <div className="flex flex-col items-center">
+              {topArtist.images && topArtist.images.length > 0 && (
+                <img
+                  src={topArtist.images[0].url}
+                  alt={topArtist.name}
+                  className="w-48 h-48 object-cover rounded-full mb-4"
+                />
+              )}
+              <h4 className="text-xl font-bold text-white mb-2 text-center">
+                {topArtist.name}
+              </h4>
+              {topArtist.genres && topArtist.genres.length > 0 && (
+                <div className="flex flex-wrap justify-center gap-2 mb-2">
+                  {topArtist.genres.slice(0, 3).map((genre) => (
+                    <span
+                      key={genre}
+                      className="px-2 py-1 bg-spotify-green text-black text-xs rounded-full"
+                    >
+                      {genre}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {topArtist.followers && (
+                <p className="text-spotify-lightgray text-sm">
+                  {topArtist.followers.total.toLocaleString()} followers
+                </p>
+              )}
+            </div>
           </div>
         )}
 
@@ -211,7 +239,7 @@ export const Dashboard: React.FC = () => {
           </div>
           <button
             onClick={() => navigate("/top-songs")}
-            className="mt-4 text-spotify-green hover:text-green-400 text-sm"
+            className="mt-4 text-spotify-green hover:text-green-400 text-sm cursor-pointer"
           >
             View all top tracks →
           </button>
