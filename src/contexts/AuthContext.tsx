@@ -1,117 +1,158 @@
-import React, {
-  createContext,
-  useContext,
-  useState,
-  useEffect,
-  ReactNode,
-} from "react";
-import { AuthState, SpotifyUser } from "../types";
-import { spotifyApi, spotifyAuth, setSpotifyToken } from "../services/api";
-
-interface AuthContextType extends AuthState {
-  login: () => void;
-  logout: () => void;
-  handleCallback: (code: string) => Promise<void>;
-}
+import React, { createContext, useContext, useState, useEffect } from "react";
+import { spotifyApi, setSpotifyToken, spotifyAuth } from "../services/api";
+import type { SpotifyUser, AuthContextType } from "../types";
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
-  if (!context) {
+  if (context === undefined) {
     throw new Error("useAuth must be used within an AuthProvider");
   }
   return context;
 };
 
-interface AuthProviderProps {
-  children: ReactNode;
-}
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [user, setUser] = useState<SpotifyUser | null>(null);
+  const [loading, setLoading] = useState(true); // Add loading state
 
-export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
-  const [authState, setAuthState] = useState<AuthState>({
-    isAuthenticated: false,
-    accessToken: null,
-    user: null,
-    loading: true,
-  });
-
-  useEffect(() => {
-    // Check for existing token in localStorage on app start
-    const savedToken = localStorage.getItem("spotify_access_token");
-    const savedUser = localStorage.getItem("spotify_user");
-
-    if (savedToken && savedUser) {
-      setSpotifyToken(savedToken);
-      setAuthState({
-        isAuthenticated: true,
-        accessToken: savedToken,
-        user: JSON.parse(savedUser),
-        loading: false,
-      });
-    } else {
-      setAuthState((prev) => ({ ...prev, loading: false }));
-    }
-  }, []);
+  const setToken = (token: string) => {
+    console.log("Setting token:", token); // Debug log
+    setAccessToken(token);
+    setSpotifyToken(token);
+    localStorage.setItem("spotify_access_token", token);
+    setIsAuthenticated(true);
+  };
 
   const login = () => {
-    const authUrl = spotifyAuth.getAuthUrl();
-    window.location.href = authUrl;
+    window.location.href = spotifyAuth.getAuthUrl();
   };
 
   const logout = () => {
+    console.log("Logging out"); // Debug log
+    setAccessToken(null);
+    setUser(null);
+    setIsAuthenticated(false);
     localStorage.removeItem("spotify_access_token");
-    localStorage.removeItem("spotify_user");
-    setAuthState({
-      isAuthenticated: false,
-      accessToken: null,
-      user: null,
-      loading: false,
-    });
+    localStorage.removeItem("spotify_token_expires");
   };
 
-  const handleCallback = async (code: string) => {
+  const handleCallback = async () => {
     try {
-      setAuthState((prev) => ({ ...prev, loading: true }));
+      console.log("Handling callback..."); // Debug log
 
-      // Exchange code for token via your Django backend
-      const tokenResponse = await spotifyAuth.exchangeCodeForToken(code);
-      const accessToken = tokenResponse.access_token;
+      // First, try to get token from URL hash (implicit flow)
+      const tokenData = spotifyAuth.getTokenFromUrl();
+      if (tokenData) {
+        console.log("Found token in URL hash"); // Debug log
+        const expiresAt = Date.now() + tokenData.expires_in * 1000;
+        localStorage.setItem("spotify_token_expires", expiresAt.toString());
+        setToken(tokenData.access_token);
 
-      // Set the token for API calls
-      setSpotifyToken(accessToken);
+        // Clear the hash from URL
+        window.history.replaceState(
+          {},
+          document.title,
+          window.location.pathname
+        );
+        return;
+      }
 
-      // Get user profile
-      const user = await spotifyApi.getCurrentUser();
+      // Fallback: try authorization code flow
+      const code = spotifyAuth.getCodeFromUrl();
+      if (code) {
+        console.log("Found authorization code"); // Debug log
+        try {
+          const tokenResponse = await spotifyAuth.exchangeCodeForToken(code);
+          setToken(tokenResponse.access_token);
 
-      // Save to localStorage
-      localStorage.setItem("spotify_access_token", accessToken);
-      localStorage.setItem("spotify_user", JSON.stringify(user));
-
-      setAuthState({
-        isAuthenticated: true,
-        accessToken,
-        user,
-        loading: false,
-      });
+          // Clear the code from URL
+          window.history.replaceState(
+            {},
+            document.title,
+            window.location.pathname
+          );
+        } catch (error) {
+          console.error("Authorization code flow failed:", error);
+          // Redirect back to login
+          window.location.href = "/";
+        }
+      }
     } catch (error) {
       console.error("Authentication error:", error);
-      setAuthState({
-        isAuthenticated: false,
-        accessToken: null,
-        user: null,
-        loading: false,
-      });
+      logout();
     }
   };
+
+  useEffect(() => {
+    const initializeAuth = async () => {
+      console.log("Initializing auth..."); // Debug log
+
+      // Check for existing token
+      const token = localStorage.getItem("spotify_access_token");
+      const expiresAt = localStorage.getItem("spotify_token_expires");
+
+      console.log("Stored token:", token ? "exists" : "none"); // Debug log
+      console.log("Token expires at:", expiresAt); // Debug log
+
+      if (token && expiresAt && Date.now() < parseInt(expiresAt)) {
+        console.log("Using stored token"); // Debug log
+        setToken(token);
+      } else if (token) {
+        console.log("Token expired, logging out"); // Debug log
+        logout();
+      }
+
+      // Handle callback if we're on the callback page
+      if (
+        window.location.pathname === "/auth/callback" ||
+        window.location.hash.includes("access_token") ||
+        window.location.search.includes("code=")
+      ) {
+        console.log("Detected callback URL"); // Debug log
+        await handleCallback();
+      }
+
+      setLoading(false); // Set loading to false after initialization
+    };
+
+    initializeAuth();
+  }, []);
+
+  useEffect(() => {
+    if (isAuthenticated && accessToken && !user) {
+      console.log("Fetching user data..."); // Debug log
+      spotifyApi
+        .getCurrentUser()
+        .then((userData) => {
+          console.log("User data fetched:", userData); // Debug log
+          setUser(userData);
+        })
+        .catch((error) => {
+          console.error("Failed to fetch user:", error);
+          logout();
+        });
+    }
+  }, [isAuthenticated, accessToken, user]);
+
+  // Don't render children until we've checked for existing auth
+  if (loading) {
+    return <div>Loading...</div>; // Or your loading component
+  }
 
   return (
     <AuthContext.Provider
       value={{
-        ...authState,
+        isAuthenticated,
+        accessToken,
+        user,
         login,
         logout,
-        handleCallback,
+        setToken,
       }}
     >
       {children}

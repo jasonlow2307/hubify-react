@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Play, Pause, RefreshCw, Heart, X } from "lucide-react";
-import { SpotifyTrack, SpotifyArtist } from "../types";
+import type { SpotifyTrack, SpotifyArtist } from "../types";
 import { spotifyApi } from "../services/api";
 import { useAuth } from "../contexts/AuthContext";
 
@@ -62,11 +62,11 @@ export const Spotimatch: React.FC = () => {
 
       // Get user's top track
       const topTracks = await spotifyApi.getTopTracks("medium_term", 1);
-      if (topTracks.length === 0) {
+      if (topTracks.items.length === 0) {
         throw new Error("No top tracks found");
       }
 
-      const track = topTracks[0];
+      const track = topTracks.items[0];
 
       // Get detailed artist information
       const artistDetails = await spotifyApi.getArtist(track.artists[0].id);
@@ -85,10 +85,22 @@ export const Spotimatch: React.FC = () => {
       });
 
       // Process recommendations with similarity scores and reasons
+      interface RecommendationProcessor {
+        track: SpotifyTrack;
+        recTrack: SpotifyTrack;
+        artistDetails: SpotifyArtist;
+        reasons: string[];
+        similarity_score: number;
+      }
+
       const processedRecommendations: RecommendationMatch[] = recs.tracks.map(
-        (recTrack) => {
-          const reasons = generateMatchReasons(track, recTrack, artistDetails);
-          const similarity_score = calculateSimilarityScore(
+        (recTrack: SpotifyTrack): RecommendationMatch => {
+          const reasons: string[] = generateMatchReasons(
+            track,
+            recTrack,
+            artistDetails
+          );
+          const similarity_score: number = calculateSimilarityScore(
             track,
             recTrack,
             reasons

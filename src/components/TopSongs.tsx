@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Calendar, TrendingUp, User, Music, Play, Pause } from "lucide-react";
-import { SpotifyTrack, TimeRange } from "../types";
+import type { SpotifyTrack, TimeRange } from "../types";
 import { spotifyApi } from "../services/api";
 
 interface TopSongsStats {
@@ -60,10 +60,10 @@ export const TopSongs: React.FC = () => {
     try {
       setLoading(true);
       const topTracks = await spotifyApi.getTopTracks(timeRange, 50);
-      setTracks(topTracks);
+      setTracks(topTracks.items);
 
       // Calculate stats
-      const calculatedStats = calculateStats(topTracks);
+      const calculatedStats = calculateStats(topTracks.items);
       setStats(calculatedStats);
     } catch (error) {
       console.error("Error loading top songs:", error);

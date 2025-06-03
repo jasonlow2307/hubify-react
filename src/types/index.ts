@@ -60,6 +60,7 @@ export interface LeaderboardEntry {
 }
 
 export interface LeaderboardResponse {
+  leaderboard: LeaderboardEntry[];
   Items: LeaderboardEntry[];
   Count: number;
 }
@@ -70,6 +71,21 @@ export interface GameState {
   turn: number;
   gameOver: boolean;
   timeRemaining: number;
+}
+
+export interface GameScore {
+  playerName: string;
+  score: number;
+  gameType: "gotify" | "spotimatch";
+}
+
+export interface AuthContextType {
+  isAuthenticated: boolean;
+  accessToken: string | null;
+  user: SpotifyUser | null;
+  login: () => void;
+  logout: () => void;
+  setToken: (token: string) => void;
 }
 
 export interface AuthState {

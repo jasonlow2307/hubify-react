@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Play, Pause, RotateCcw, Home, Award } from "lucide-react";
-import { SpotifyTrack } from "../types";
+import type { SpotifyTrack } from "../types";
 import { spotifyApi } from "../services/api";
 import { useAuth } from "../contexts/AuthContext";
 
@@ -53,8 +53,8 @@ export const Gotify: React.FC = () => {
     const loadTracks = async () => {
       try {
         setLoading(true);
-        const tracks = await spotifyApi.getTopTracks("medium_term", 50);
-        setGameState((prev) => ({ ...prev, tracks }));
+        const response = await spotifyApi.getTopTracks("medium_term", 50);
+        setGameState((prev) => ({ ...prev, tracks: response.items }));
       } catch (error) {
         console.error("Error loading tracks:", error);
       } finally {
