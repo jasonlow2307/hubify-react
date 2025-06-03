@@ -33,6 +33,15 @@ export const TopSongs: React.FC = () => {
   });
   const [playingTrack, setPlayingTrack] = useState<string | null>(null);
   const [audio, setAudio] = useState<HTMLAudioElement | null>(null);
+  const [showAllTracks, setShowAllTracks] = useState(false);
+  const [artistsWithImages, setArtistsWithImages] = useState<{
+    [key: string]: {
+      name: string;
+      count: number;
+      tracks: SpotifyTrack[];
+      imageUrl?: string;
+    };
+  }>({});
 
   const timeRangeOptions: {
     value: TimeRange;
@@ -79,6 +88,9 @@ export const TopSongs: React.FC = () => {
       // Calculate stats
       const calculatedStats = calculateStats(topTracks.items);
       setStats(calculatedStats);
+
+      // Fetch artist images immediately (no delay)
+      fetchArtistImages();
     } catch (error) {
       console.error("Error loading top songs:", error);
     } finally {
@@ -280,18 +292,103 @@ export const TopSongs: React.FC = () => {
     }
   };
 
+  // Update the existing getArtistFrequency to use the helper
   const getArtistFrequency = () => {
+    return getArtistFrequencyFromTracks(tracks);
+  };
+
+  // Add useEffect to fetch images when tracks change
+  useEffect(() => {
+    if (tracks.length > 0) {
+      // Fetch images whenever tracks change
+      fetchArtistImages(tracks);
+    }
+  }, [tracks]);
+
+  const fetchArtistImages = async (tracksToProcess?: SpotifyTrack[]) => {
+    try {
+      // Use provided tracks or current tracks state
+      const currentTracks = tracksToProcess || tracks;
+
+      if (currentTracks.length === 0) {
+        console.log("No tracks available for image fetching");
+        return;
+      }
+
+      const artistFrequency = getArtistFrequencyFromTracks(currentTracks);
+      const updatedArtists: typeof artistsWithImages = { ...artistsWithImages };
+
+      // Get unique artist IDs that don't have images yet
+      const artistsNeedingImages = artistFrequency
+        .filter((artist) => {
+          // Find the artist ID from tracks
+          const artistId = currentTracks.find(
+            (track) => track.artists[0].name === artist.name
+          )?.artists[0].id;
+          return artistId && !updatedArtists[artistId]?.imageUrl;
+        })
+        .slice(0, 10); // Limit to top 10 to avoid too many API calls
+
+      console.log(
+        `🎨 Fetching images for ${artistsNeedingImages.length} artists...`
+      );
+
+      // Fetch images for artists that need them - with real-time updates
+      for (const artist of artistsNeedingImages) {
+        try {
+          // Find the artist ID from tracks
+          const track = currentTracks.find(
+            (track) => track.artists[0].name === artist.name
+          );
+          if (track) {
+            const artistId = track.artists[0].id;
+            console.log(`🖼️ Fetching image for artist: ${artist.name}`);
+
+            const artistData = await spotifyApi.getArtist(artistId);
+
+            updatedArtists[artistId] = {
+              ...artist,
+              imageUrl:
+                artistData.images?.[0]?.url || artistData.images?.[1]?.url,
+            };
+
+            // Update state immediately when each image is found
+            setArtistsWithImages({ ...updatedArtists });
+
+            console.log(`✅ Found image for: ${artist.name}`);
+          }
+
+          // Small delay to avoid hitting rate limits
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        } catch (error) {
+          console.error(`Failed to fetch image for ${artist.name}:`, error);
+        }
+      }
+
+      console.log(`🎉 Artist image fetching complete!`);
+    } catch (error) {
+      console.error("Error fetching artist images:", error);
+    }
+  };
+
+  const getArtistFrequencyFromTracks = (tracksArray: SpotifyTrack[]) => {
     const artistCount: {
-      [key: string]: { name: string; count: number; tracks: SpotifyTrack[] };
+      [key: string]: {
+        name: string;
+        count: number;
+        tracks: SpotifyTrack[];
+        imageUrl?: string;
+      };
     } = {};
 
-    tracks.forEach((track) => {
+    tracksArray.forEach((track) => {
       const artist = track.artists[0];
       if (!artistCount[artist.id]) {
         artistCount[artist.id] = {
           name: artist.name,
           count: 0,
           tracks: [],
+          imageUrl: artistsWithImages[artist.id]?.imageUrl,
         };
       }
       artistCount[artist.id].count++;
@@ -301,6 +398,11 @@ export const TopSongs: React.FC = () => {
     return Object.values(artistCount)
       .sort((a, b) => b.count - a.count)
       .slice(0, 10);
+  };
+
+  const handleManualImageRefresh = () => {
+    console.log("🔄 Manual image refresh triggered");
+    fetchArtistImages(tracks);
   };
 
   if (loading) {
@@ -405,116 +507,374 @@ export const TopSongs: React.FC = () => {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           {/* Enhanced Top Tracks List */}
           <div className="bg-spotify-darkgray p-6 rounded-lg">
-            <h2 className="text-2xl font-bold mb-4 flex items-center gap-2">
-              <TrendingUp size={24} />
-              Your Top Tracks
-              <span className="text-sm text-spotify-lightgray font-normal">
-                ({tracks.filter((t) => t.preview_url).length}/{tracks.length}{" "}
-                with previews)
-              </span>
-            </h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-2xl font-bold flex items-center gap-2">
+                <TrendingUp size={24} />
+                Your Top Tracks
+                <span className="text-sm text-spotify-lightgray font-normal">
+                  ({tracks.filter((t) => t.preview_url).length}/{tracks.length}{" "}
+                  with previews)
+                </span>
+              </h2>
+
+              {/* Toggle button for showing all tracks */}
+              <button
+                onClick={() => setShowAllTracks(!showAllTracks)}
+                className="px-3 py-1 cursor-pointer text-sm bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors flex items-center gap-2"
+              >
+                <Music size={16} />
+                {showAllTracks ? `Show Top 20` : `Show All ${tracks.length}`}
+              </button>
+            </div>
+
             <div className="space-y-3 max-h-96 overflow-y-auto">
-              {tracks.slice(0, 20).map((track, index) => (
-                <div
-                  key={track.id}
-                  className="flex items-center gap-3 p-2 rounded hover:bg-gray-700 transition-colors"
-                >
-                  <div className="text-spotify-green font-bold w-6 text-center">
-                    {index + 1}
-                  </div>
-                  <div className="relative">
-                    <img
-                      src={
-                        track.album.images[2]?.url || track.album.images[0]?.url
-                      }
-                      alt={track.album.name}
-                      className="w-12 h-12 rounded"
-                    />
-                    {/* Preview indicator */}
-                    {track.preview_url && (
-                      <div className="absolute -top-1 -right-1 w-3 h-3 bg-spotify-green rounded-full"></div>
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium truncate">{track.name}</div>
-                    <div className="text-sm text-spotify-lightgray truncate">
-                      {track.artists[0].name}
+              {tracks
+                .slice(0, showAllTracks ? tracks.length : 20)
+                .map((track, index) => (
+                  <div
+                    key={track.id}
+                    className="flex items-center gap-3 p-2 rounded hover:bg-gray-700 transition-colors"
+                  >
+                    <div className="text-spotify-green font-bold w-6 text-center">
+                      {index + 1}
+                    </div>
+                    <div className="relative">
+                      <img
+                        src={
+                          track.album.images[2]?.url ||
+                          track.album.images[0]?.url
+                        }
+                        alt={track.album.name}
+                        className="w-12 h-12 rounded"
+                      />
+                      {/* Preview indicator */}
+                      {track.preview_url && (
+                        <div className="absolute -top-1 -right-1 w-3 h-3 bg-spotify-green rounded-full"></div>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium truncate">{track.name}</div>
+                      <div className="text-sm text-spotify-lightgray truncate">
+                        {track.artists[0].name}
+                      </div>
+                    </div>
+                    <div className="text-xs text-gray-400">
+                      {track.popularity}%
+                    </div>
+
+                    {/* Enhanced control buttons */}
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() =>
+                          playingTrack === track.id
+                            ? pauseTrack()
+                            : playTrack(track)
+                        }
+                        className="p-2 cursor-pointer rounded-full hover:bg-spotify-green hover:text-black transition-colors"
+                        title={
+                          track.preview_url
+                            ? "Play preview"
+                            : "Find & play preview or open in Spotify"
+                        }
+                      >
+                        {playingTrack === track.id ? (
+                          <Pause size={16} />
+                        ) : (
+                          <Play size={16} />
+                        )}
+                      </button>
+
+                      <button
+                        onClick={() =>
+                          window.open(track.external_urls.spotify, "_blank")
+                        }
+                        className="p-2 rounded-full cursor-pointer hover:bg-spotify-green hover:text-black transition-colors"
+                        title="Open in Spotify"
+                      >
+                        <ExternalLink size={16} />
+                      </button>
                     </div>
                   </div>
-                  <div className="text-xs text-gray-400">
-                    {track.popularity}%
-                  </div>
+                ))}
+            </div>
 
-                  {/* Enhanced control buttons */}
-                  <div className="flex gap-1">
-                    <button
-                      onClick={() =>
-                        playingTrack === track.id
-                          ? pauseTrack()
-                          : playTrack(track)
-                      }
-                      className="p-2 cursor-pointer rounded-full hover:bg-spotify-green hover:text-black transition-colors"
-                      title={
-                        track.preview_url
-                          ? "Play preview"
-                          : "Find & play preview or open in Spotify"
-                      }
-                    >
-                      {playingTrack === track.id ? (
-                        <Pause size={16} />
-                      ) : (
-                        <Play size={16} />
-                      )}
-                    </button>
-
-                    <button
-                      onClick={() =>
-                        window.open(track.external_urls.spotify, "_blank")
-                      }
-                      className="p-2 rounded-full cursor-pointer hover:bg-spotify-green hover:text-black transition-colors"
-                      title="Open in Spotify"
-                    >
-                      <ExternalLink size={16} />
-                    </button>
-                  </div>
-                </div>
-              ))}
+            {/* Show count indicator at bottom */}
+            <div className="mt-4 text-center text-sm text-spotify-lightgray">
+              Showing{" "}
+              {showAllTracks ? tracks.length : Math.min(20, tracks.length)} of{" "}
+              {tracks.length} tracks
             </div>
           </div>
 
-          {/* Artist Frequency */}
+          {/* Artist Frequency with Enhanced Podium */}
           <div className="bg-spotify-darkgray p-6 rounded-lg">
-            <h2 className="text-2xl font-bold mb-4 flex items-center gap-2">
-              <User size={24} />
-              Most Played Artists
-            </h2>
-            <div className="space-y-3">
-              {getArtistFrequency().map((artist, index) => (
-                <div key={index} className="flex items-center justify-between">
-                  <div>
-                    <div className="font-medium">{artist.name}</div>
-                    <div className="text-sm text-spotify-lightgray">
-                      {artist.count} track{artist.count > 1 ? "s" : ""}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-spotify-green font-bold">
-                      #{index + 1}
-                    </div>
-                    <div className="w-20 h-2 bg-gray-600 rounded-full">
-                      <div
-                        className="h-full bg-spotify-green rounded-full"
-                        style={{
-                          width: `${
-                            (artist.count / getArtistFrequency()[0].count) * 100
-                          }%`,
-                        }}
-                      ></div>
-                    </div>
-                  </div>
-                </div>
-              ))}
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-2xl font-bold flex items-center gap-2">
+                <User size={24} />
+                Most Played Artists
+              </h2>
+
+              {/* Button to manually fetch artist images */}
+              <button
+                onClick={handleManualImageRefresh}
+                className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors flex items-center gap-2"
+              >
+                <RefreshCw size={16} />
+                Load Images
+              </button>
             </div>
+
+            {/* Top 3 Artists Podium */}
+            <div className="mb-8">
+              <div className="flex items-end justify-center gap-6 mb-4">
+                {getArtistFrequency()
+                  .slice(0, 3)
+                  .map((artist, index) => {
+                    // Fix the positions and heights mapping
+                    // index 0 = 1st place, index 1 = 2nd place, index 2 = 3rd place
+                    // But we want to display them as: 2nd, 1st, 3rd (left to right)
+                    const displayOrder = [1, 0, 2]; // 2nd place, 1st place, 3rd place
+                    const heights = ["h-24", "h-32", "h-20"]; // Medium, Tallest, Shortest
+                    const widths = ["w-20", "w-24", "w-18"]; // Medium, Widest, Narrowest
+                    const colors = [
+                      "bg-gray-400", // Silver for 2nd place
+                      "bg-gradient-to-t from-yellow-500 to-yellow-300", // Gold for 1st place
+                      "bg-gradient-to-t from-orange-500 to-orange-300", // Bronze for 3rd place
+                    ];
+                    const textColors = [
+                      "text-gray-300", // Silver text
+                      "text-yellow-300", // Gold text
+                      "text-orange-300", // Bronze text
+                    ];
+                    const borderColors = [
+                      "border-gray-400", // Silver border
+                      "border-yellow-400", // Gold border
+                      "border-orange-400", // Bronze border
+                    ];
+                    const trophyIcons = ["🥈", "🥇", "🥉"];
+
+                    // Get the actual artist for this display position
+                    const actualArtistIndex = displayOrder[index];
+                    const actualArtist =
+                      getArtistFrequency()[actualArtistIndex];
+
+                    if (!actualArtist) return null;
+
+                    // Find artist ID and get cached image
+                    const track = tracks.find(
+                      (track) => track.artists[0].name === actualArtist.name
+                    );
+                    const artistId = track?.artists[0].id;
+                    const artistImage = artistId
+                      ? artistsWithImages[artistId]?.imageUrl
+                      : null;
+                    const isImageLoading =
+                      artistId && !artistsWithImages[artistId]?.imageUrl;
+
+                    return (
+                      <div
+                        key={actualArtist.name}
+                        className="flex flex-col items-center"
+                      >
+                        {/* Artist Image (circular) with loading state */}
+                        <div className="relative mb-3">
+                          <div
+                            className={`w-20 h-20 bg-gradient-to-br from-gray-600 to-gray-700 rounded-full flex items-center justify-center overflow-hidden border-4 ${
+                              borderColors[index]
+                            } shadow-lg ${
+                              isImageLoading ? "animate-pulse" : ""
+                            }`}
+                          >
+                            {artistImage ? (
+                              <img
+                                src={artistImage}
+                                alt={actualArtist.name}
+                                className="w-full h-full object-cover"
+                                onError={(e) => {
+                                  e.currentTarget.style.display = "none";
+                                  if (e.currentTarget.nextElementSibling) {
+                                    (
+                                      e.currentTarget
+                                        .nextElementSibling as HTMLElement
+                                    ).style.display = "flex";
+                                  }
+                                }}
+                              />
+                            ) : (
+                              <div className="flex flex-col items-center">
+                                <User size={36} className="text-gray-300" />
+                                {isImageLoading && (
+                                  <div className="text-xs text-gray-400 mt-1">
+                                    Loading...
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            {artistImage && (
+                              <User
+                                size={36}
+                                className="text-gray-300 hidden"
+                              />
+                            )}
+                          </div>
+                          {/* Trophy Badge */}
+                          <div className="absolute -top-1 -right-1 text-2xl">
+                            {trophyIcons[index]}
+                          </div>
+                        </div>
+
+                        {/* Podium */}
+                        <div
+                          className={`${heights[index]} ${widths[index]} ${colors[index]} rounded-t-xl flex flex-col items-center justify-end pb-3 shadow-lg relative`}
+                        >
+                          {/* Rank number */}
+                          {/* <div className="absolute top-2 text-black font-bold text-lg">
+                            {actualArtistIndex + 1}
+                          </div> */}
+                          {/* Track count */}
+                          <div className="text-black font-bold text-lg">
+                            {actualArtist.count}
+                          </div>
+                          <div className="text-black text-xs opacity-80">
+                            tracks
+                          </div>
+                        </div>
+
+                        {/* Artist Info */}
+                        <div className="text-center mt-3 max-w-24">
+                          <div
+                            className={`font-bold ${textColors[index]} truncate`}
+                          >
+                            {actualArtist.name}
+                          </div>
+                          <div className="text-xs text-spotify-lightgray mt-1">
+                            {Math.round(
+                              (actualArtist.count / tracks.length) * 100
+                            )}
+                            % of top tracks
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+
+              {/* Podium Base */}
+              <div className="h-4 bg-gradient-to-r from-gray-600 via-gray-500 to-gray-600 rounded-lg mx-8"></div>
+            </div>
+
+            {/* Rest of Artists List */}
+            {getArtistFrequency().length > 3 && (
+              <div>
+                <div className="flex items-center gap-2 mb-4">
+                  <div className="h-px bg-gray-600 flex-1"></div>
+                  <span className="text-sm text-spotify-lightgray px-3">
+                    Other Artists
+                  </span>
+                  <div className="h-px bg-gray-600 flex-1"></div>
+                </div>
+
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {getArtistFrequency()
+                    .slice(3)
+                    .map((artist, index) => {
+                      // Find artist ID and get cached image
+                      const track = tracks.find(
+                        (track) => track.artists[0].name === artist.name
+                      );
+                      const artistId = track?.artists[0].id;
+                      const artistImage = artistId
+                        ? artistsWithImages[artistId]?.imageUrl
+                        : null;
+                      const isImageLoading =
+                        artistId && !artistsWithImages[artistId]?.imageUrl;
+
+                      return (
+                        <div
+                          key={artist.name}
+                          className="flex items-center justify-between p-3 bg-gray-700/20 hover:bg-gray-700/40 rounded-lg transition-colors"
+                        >
+                          <div className="flex items-center gap-3">
+                            {/* Rank circle */}
+                            <div className="w-8 h-8 bg-gray-600 rounded-full flex items-center justify-center text-xs font-bold">
+                              {index + 4}
+                            </div>
+                            {/* Artist avatar with real image and loading state */}
+                            <div
+                              className={`w-10 h-10 bg-gradient-to-br from-gray-600 to-gray-700 rounded-full flex items-center justify-center border-2 border-gray-500 overflow-hidden ${
+                                isImageLoading ? "animate-pulse" : ""
+                              }`}
+                            >
+                              {artistImage ? (
+                                <img
+                                  src={artistImage}
+                                  alt={artist.name}
+                                  className="w-full h-full object-cover"
+                                  onError={(e) => {
+                                    e.currentTarget.style.display = "none";
+                                    if (e.currentTarget.nextElementSibling) {
+                                      (
+                                        e.currentTarget
+                                          .nextElementSibling as HTMLElement
+                                      ).style.display = "flex";
+                                    }
+                                  }}
+                                />
+                              ) : (
+                                <User size={20} className="text-gray-300" />
+                              )}
+                              {artistImage && (
+                                <User
+                                  size={20}
+                                  className="text-gray-300 hidden"
+                                />
+                              )}
+                            </div>
+                            <div>
+                              <div className="font-medium">{artist.name}</div>
+                              <div className="text-sm text-spotify-lightgray">
+                                {artist.count} track
+                                {artist.count > 1 ? "s" : ""} •{" "}
+                                {Math.round(
+                                  (artist.count / tracks.length) * 100
+                                )}
+                                %
+                                {isImageLoading && (
+                                  <span className="text-xs text-blue-400 ml-2">
+                                    Loading image...
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="w-20 h-2 bg-gray-600 rounded-full mb-1">
+                              <div
+                                className="h-full bg-gradient-to-r from-spotify-green to-green-400 rounded-full"
+                                style={{
+                                  width: `${
+                                    (artist.count /
+                                      getArtistFrequency()[0].count) *
+                                    100
+                                  }%`,
+                                }}
+                              ></div>
+                            </div>
+                            <div className="text-xs text-gray-400">
+                              vs #1:{" "}
+                              {Math.round(
+                                (artist.count / getArtistFrequency()[0].count) *
+                                  100
+                              )}
+                              %
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
