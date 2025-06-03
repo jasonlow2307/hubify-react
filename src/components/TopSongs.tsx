@@ -185,7 +185,7 @@ export const TopSongs: React.FC = () => {
     }
   };
 
-  // Function to enhance all tracks with preview URLs
+  // Function to enhance all tracks with preview URLs - with real-time updates
   const enhanceAllPreviews = async () => {
     if (enhancingPreviews) return;
 
@@ -193,20 +193,77 @@ export const TopSongs: React.FC = () => {
     setEnhancementProgress({ processed: 0, total: 0 });
 
     try {
-      const enhancedTracks = await previewUrlApi.enhanceTracksWithPreviewUrls(
-        tracks,
-        (processed, total) => {
-          setEnhancementProgress({ processed, total });
-        }
+      const tracksNeedingPreview = tracks
+        .map((track, index) => ({ track, index }))
+        .filter(({ track }) => !track.preview_url);
+
+      if (tracksNeedingPreview.length === 0) {
+        console.log("All tracks already have preview URLs!");
+        setEnhancingPreviews(false);
+        return;
+      }
+
+      setEnhancementProgress({
+        processed: 0,
+        total: tracksNeedingPreview.length,
+      });
+
+      console.log(
+        `🔍 Finding preview URLs for ${tracksNeedingPreview.length} tracks...`
       );
 
-      setTracks(enhancedTracks);
+      // Process tracks sequentially to avoid overwhelming the APIs
+      const DELAY_BETWEEN_REQUESTS = 600; // Delay between individual requests
 
-      const tracksWithPreviews = enhancedTracks.filter(
+      for (let i = 0; i < tracksNeedingPreview.length; i++) {
+        const { track, index } = tracksNeedingPreview[i];
+
+        try {
+          console.log(
+            `🎵 Searching for: ${track.name} by ${track.artists[0].name}`
+          );
+
+          const previewUrl = await previewUrlApi.findPreviewUrlDeezer(
+            track.artists[0].name,
+            track.name
+          );
+
+          if (previewUrl) {
+            // Update tracks state immediately when a preview is found
+            setTracks((prevTracks) =>
+              prevTracks.map((t) =>
+                t.id === track.id ? { ...t, preview_url: previewUrl } : t
+              )
+            );
+
+            console.log(`✅ Found preview for: ${track.name} - NOW PLAYABLE!`);
+          } else {
+            console.log(`❌ No preview found for: ${track.name}`);
+          }
+
+          // Update progress after each track
+          setEnhancementProgress({
+            processed: i + 1,
+            total: tracksNeedingPreview.length,
+          });
+        } catch (error) {
+          console.error(`❌ Failed to find preview for ${track.name}:`, error);
+        }
+
+        // Add delay between requests to avoid rate limiting
+        if (i < tracksNeedingPreview.length - 1) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, DELAY_BETWEEN_REQUESTS)
+          );
+        }
+      }
+
+      // Final summary
+      const finalTracksWithPreviews = tracks.filter(
         (track) => track.preview_url
       ).length;
       console.log(
-        `Enhancement complete: ${tracksWithPreviews}/${enhancedTracks.length} tracks now have preview URLs`
+        `🎉 Enhancement complete! Total tracks with previews: ${finalTracksWithPreviews}/${tracks.length}`
       );
     } catch (error) {
       console.error("Error enhancing tracks:", error);
