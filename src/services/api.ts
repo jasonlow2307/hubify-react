@@ -266,61 +266,66 @@ export const spotifyAuth = {
 
 // Add preview URL finding utilities
 export const previewUrlApi = {
-  // Find preview URL using Spotify search API first, then fallback to serverless function
-  findPreviewUrl: async (
+  // Use Deezer API for preview URLs (no authentication required!)
+  findPreviewUrlDeezer: async (
     artist: string,
-    title: string,
-    album?: string
+    title: string
   ): Promise<string | null> => {
     try {
-      // First try Spotify search API
-      const searchQuery = `track:"${title}" artist:"${artist}"${
-        album ? ` album:"${album}"` : ""
-      }`;
+      // Clean and prepare the query for better Chinese character handling
+      const cleanArtist = artist.trim();
+      const cleanTitle = title.trim();
 
-      const response = await spotifyClient.get("/search", {
-        params: {
-          q: searchQuery,
-          type: "track",
-          limit: 1,
-        },
-      });
+      // Try different query formats for better results with Chinese text
+      const queries = [
+        `artist:"${cleanArtist}" track:"${cleanTitle}"`, // Exact search with quotes
+        `${cleanArtist} ${cleanTitle}`, // Simple search
+        cleanTitle, // Title only search
+        cleanArtist, // Artist only search
+      ];
 
-      const tracks = response.data.tracks?.items;
-      if (tracks && tracks.length > 0 && tracks[0].preview_url) {
-        return tracks[0].preview_url;
+      for (const query of queries) {
+        try {
+          console.log(`Trying Deezer search with query: ${query}`);
+
+          // Use the CORS proxy for the request
+          const response = await axios.get(
+            `https://cors-anywhere.herokuapp.com/https://api.deezer.com/search`,
+            {
+              params: {
+                q: query,
+              },
+              headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json; charset=utf-8",
+              },
+            }
+          );
+
+          console.log(`Deezer API response for "${query}":`, response.data);
+
+          if (response.data.data && response.data.data.length > 0) {
+            // Find first track with a preview URL and that's readable
+            const trackWithPreview = response.data.data.find(
+              (track: any) => track.preview && track.readable
+            );
+
+            if (trackWithPreview) {
+              console.log(`✅ Found Deezer preview for: ${title} by ${artist}`);
+              console.log(`Preview URL: ${trackWithPreview.preview}`);
+              return trackWithPreview.preview;
+            }
+          }
+        } catch (queryError) {
+          console.warn(`Query "${query}" failed:`, queryError);
+          continue; // Try next query
+        }
       }
 
-      // Fallback to serverless function
-      return await previewUrlApi.findPreviewUrlServerless(artist, title, album);
-    } catch (error) {
-      console.error("Error finding preview URL:", error);
-      // Try serverless function as fallback
-      return await previewUrlApi.findPreviewUrlServerless(artist, title, album);
-    }
-  },
-
-  // Use Vercel serverless function for spotify-preview-finder
-  findPreviewUrlServerless: async (
-    artist: string,
-    title: string,
-    album?: string
-  ): Promise<string | null> => {
-    try {
-      const baseUrl = import.meta.env.VITE_VERCEL_URL || window.location.origin;
-      const response = await axios.post(`${baseUrl}/api/preview`, {
-        artist,
-        title,
-        album,
-      });
-
-      if (response.data.success && response.data.previewUrl) {
-        return response.data.previewUrl;
-      }
-
+      console.log(`❌ No preview found on Deezer for: ${title} by ${artist}`);
       return null;
     } catch (error) {
-      console.error("Error with serverless preview finder:", error);
+      console.error("Error with Deezer preview finder:", error);
       return null;
     }
   },
@@ -340,12 +345,12 @@ export const previewUrlApi = {
     }
 
     console.log(
-      `Finding preview URLs for ${tracksNeedingPreview.length} tracks...`
+      `Finding preview URLs for ${tracksNeedingPreview.length} tracks using Deezer...`
     );
 
-    // Process in batches to respect rate limits
-    const BATCH_SIZE = 5;
-    const DELAY_BETWEEN_BATCHES = 1000; // 1 second
+    // Process in smaller batches for Deezer API
+    const BATCH_SIZE = 3;
+    const DELAY_BETWEEN_BATCHES = 800; // Slightly less delay since Deezer is more permissive
 
     for (let i = 0; i < tracksNeedingPreview.length; i += BATCH_SIZE) {
       const batch = tracksNeedingPreview.slice(i, i + BATCH_SIZE);
@@ -353,10 +358,9 @@ export const previewUrlApi = {
       // Process batch in parallel
       const promises = batch.map(async ({ track, index }) => {
         try {
-          const previewUrl = await previewUrlApi.findPreviewUrl(
+          const previewUrl = await previewUrlApi.findPreviewUrlDeezer(
             track.artists[0].name,
-            track.name,
-            track.album.name
+            track.name
           );
 
           if (previewUrl) {

@@ -1,7 +1,16 @@
 import React, { useState, useEffect } from "react";
-import { Calendar, TrendingUp, User, Music, Play, Pause } from "lucide-react";
+import {
+  Calendar,
+  TrendingUp,
+  User,
+  Music,
+  Play,
+  Pause,
+  RefreshCw,
+  ExternalLink,
+} from "lucide-react";
 import type { SpotifyTrack, TimeRange } from "../types";
-import { spotifyApi } from "../services/api";
+import { previewUrlApi, spotifyApi } from "../services/api";
 
 interface TopSongsStats {
   totalTracks: number;
@@ -17,6 +26,11 @@ export const TopSongs: React.FC = () => {
   const [tracks, setTracks] = useState<SpotifyTrack[]>([]);
   const [stats, setStats] = useState<TopSongsStats | null>(null);
   const [loading, setLoading] = useState(false);
+  const [enhancingPreviews, setEnhancingPreviews] = useState(false);
+  const [enhancementProgress, setEnhancementProgress] = useState({
+    processed: 0,
+    total: 0,
+  });
   const [playingTrack, setPlayingTrack] = useState<string | null>(null);
   const [audio, setAudio] = useState<HTMLAudioElement | null>(null);
 
@@ -115,22 +129,91 @@ export const TopSongs: React.FC = () => {
     };
   };
 
-  const playTrack = (track: SpotifyTrack) => {
-    if (!track.preview_url) return;
-
+  const playTrack = async (track: SpotifyTrack) => {
     // Stop current audio if playing
     if (audio) {
       audio.pause();
       audio.currentTime = 0;
     }
 
-    const newAudio = new Audio(track.preview_url);
-    setAudio(newAudio);
-    setPlayingTrack(track.id);
+    // If no preview URL, try to find one
+    if (!track.preview_url) {
+      console.log(`No preview URL for ${track.name}, searching...`);
 
-    newAudio.play();
-    newAudio.onended = () => setPlayingTrack(null);
-    newAudio.onerror = () => setPlayingTrack(null);
+      try {
+        const previewUrl = await previewUrlApi.findPreviewUrlDeezer(
+          track.artists[0].name,
+          track.name
+        );
+
+        if (previewUrl) {
+          // Update the track in our state
+          setTracks((prevTracks) =>
+            prevTracks.map((t) =>
+              t.id === track.id ? { ...t, preview_url: previewUrl } : t
+            )
+          );
+          track.preview_url = previewUrl;
+        } else {
+          // No preview found, open in Spotify instead
+          window.open(track.external_urls.spotify, "_blank");
+          return;
+        }
+      } catch (error) {
+        console.error("Failed to find preview URL:", error);
+        // Fallback to opening in Spotify
+        window.open(track.external_urls.spotify, "_blank");
+        return;
+      }
+    }
+
+    if (track.preview_url) {
+      const newAudio = new Audio(track.preview_url);
+      setAudio(newAudio);
+      setPlayingTrack(track.id);
+
+      newAudio.play().catch((error) => {
+        console.error("Failed to play audio:", error);
+        setPlayingTrack(null);
+      });
+
+      newAudio.onended = () => setPlayingTrack(null);
+      newAudio.onerror = () => {
+        console.error("Audio playback error");
+        setPlayingTrack(null);
+      };
+    }
+  };
+
+  // Function to enhance all tracks with preview URLs
+  const enhanceAllPreviews = async () => {
+    if (enhancingPreviews) return;
+
+    setEnhancingPreviews(true);
+    setEnhancementProgress({ processed: 0, total: 0 });
+
+    try {
+      const enhancedTracks = await previewUrlApi.enhanceTracksWithPreviewUrls(
+        tracks,
+        (processed, total) => {
+          setEnhancementProgress({ processed, total });
+        }
+      );
+
+      setTracks(enhancedTracks);
+
+      const tracksWithPreviews = enhancedTracks.filter(
+        (track) => track.preview_url
+      ).length;
+      console.log(
+        `Enhancement complete: ${tracksWithPreviews}/${enhancedTracks.length} tracks now have preview URLs`
+      );
+    } catch (error) {
+      console.error("Error enhancing tracks:", error);
+    } finally {
+      setEnhancingPreviews(false);
+      setEnhancementProgress({ processed: 0, total: 0 });
+    }
   };
 
   const pauseTrack = () => {
@@ -189,16 +272,33 @@ export const TopSongs: React.FC = () => {
 
         {/* Time Range Selector */}
         <div className="bg-spotify-darkgray p-6 rounded-lg mb-8">
-          <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
-            <Calendar size={24} />
-            Time Period
-          </h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold flex items-center gap-2">
+              <Calendar size={24} />
+              Time Period
+            </h2>
+
+            {/* Preview Enhancement Button */}
+            <button
+              onClick={enhanceAllPreviews}
+              disabled={enhancingPreviews}
+              className="px-4 py-2 cursor-pointer bg-spotify-green text-black rounded-lg hover:bg-green-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            >
+              <RefreshCw
+                className={`h-4 w-4 ${enhancingPreviews ? "animate-spin" : ""}`}
+              />
+              {enhancingPreviews
+                ? `Finding Previews... (${enhancementProgress.processed}/${enhancementProgress.total})`
+                : "Find Missing Previews"}
+            </button>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {timeRangeOptions.map((option) => (
               <button
                 key={option.value}
                 onClick={() => setTimeRange(option.value)}
-                className={`p-4 rounded-lg text-left transition-all ${
+                className={`p-4 rounded-lg cursor-pointer text-left transition-all ${
                   timeRange === option.value
                     ? "bg-spotify-green text-black"
                     : "bg-gray-700 hover:bg-gray-600"
@@ -246,11 +346,15 @@ export const TopSongs: React.FC = () => {
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Top Tracks List */}
+          {/* Enhanced Top Tracks List */}
           <div className="bg-spotify-darkgray p-6 rounded-lg">
             <h2 className="text-2xl font-bold mb-4 flex items-center gap-2">
               <TrendingUp size={24} />
               Your Top Tracks
+              <span className="text-sm text-spotify-lightgray font-normal">
+                ({tracks.filter((t) => t.preview_url).length}/{tracks.length}{" "}
+                with previews)
+              </span>
             </h2>
             <div className="space-y-3 max-h-96 overflow-y-auto">
               {tracks.slice(0, 20).map((track, index) => (
@@ -261,13 +365,19 @@ export const TopSongs: React.FC = () => {
                   <div className="text-spotify-green font-bold w-6 text-center">
                     {index + 1}
                   </div>
-                  <img
-                    src={
-                      track.album.images[2]?.url || track.album.images[0]?.url
-                    }
-                    alt={track.album.name}
-                    className="w-12 h-12 rounded"
-                  />
+                  <div className="relative">
+                    <img
+                      src={
+                        track.album.images[2]?.url || track.album.images[0]?.url
+                      }
+                      alt={track.album.name}
+                      className="w-12 h-12 rounded"
+                    />
+                    {/* Preview indicator */}
+                    {track.preview_url && (
+                      <div className="absolute -top-1 -right-1 w-3 h-3 bg-spotify-green rounded-full"></div>
+                    )}
+                  </div>
                   <div className="flex-1 min-w-0">
                     <div className="font-medium truncate">{track.name}</div>
                     <div className="text-sm text-spotify-lightgray truncate">
@@ -277,21 +387,39 @@ export const TopSongs: React.FC = () => {
                   <div className="text-xs text-gray-400">
                     {track.popularity}%
                   </div>
-                  <button
-                    onClick={() =>
-                      playingTrack === track.id
-                        ? pauseTrack()
-                        : playTrack(track)
-                    }
-                    disabled={!track.preview_url}
-                    className="p-2 rounded-full hover:bg-spotify-green hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {playingTrack === track.id ? (
-                      <Pause size={16} />
-                    ) : (
-                      <Play size={16} />
-                    )}
-                  </button>
+
+                  {/* Enhanced control buttons */}
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() =>
+                        playingTrack === track.id
+                          ? pauseTrack()
+                          : playTrack(track)
+                      }
+                      className="p-2 cursor-pointer rounded-full hover:bg-spotify-green hover:text-black transition-colors"
+                      title={
+                        track.preview_url
+                          ? "Play preview"
+                          : "Find & play preview or open in Spotify"
+                      }
+                    >
+                      {playingTrack === track.id ? (
+                        <Pause size={16} />
+                      ) : (
+                        <Play size={16} />
+                      )}
+                    </button>
+
+                    <button
+                      onClick={() =>
+                        window.open(track.external_urls.spotify, "_blank")
+                      }
+                      className="p-2 rounded-full cursor-pointer hover:bg-spotify-green hover:text-black transition-colors"
+                      title="Open in Spotify"
+                    >
+                      <ExternalLink size={16} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -381,8 +509,7 @@ export const TopSongs: React.FC = () => {
                       ? pauseTrack()
                       : playTrack(stats.mostPopularTrack!)
                   }
-                  disabled={!stats.mostPopularTrack.preview_url}
-                  className="p-3 rounded-full bg-yellow-400 text-black hover:scale-110 transition-transform disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="p-3 cursor-pointer rounded-full bg-yellow-400 text-black hover:scale-110 transition-transform"
                 >
                   {playingTrack === stats.mostPopularTrack.id ? (
                     <Pause size={20} />
@@ -438,8 +565,7 @@ export const TopSongs: React.FC = () => {
                       ? pauseTrack()
                       : playTrack(stats.leastPopularTrack!)
                   }
-                  disabled={!stats.leastPopularTrack.preview_url}
-                  className="p-3 rounded-full bg-purple-400 text-black hover:scale-110 transition-transform disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="p-3 rounded-full cursor-pointer bg-purple-400 text-black hover:scale-110 transition-transform"
                 >
                   {playingTrack === stats.leastPopularTrack.id ? (
                     <Pause size={20} />
