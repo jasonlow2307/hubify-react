@@ -300,16 +300,6 @@ export const Spotimatch: React.FC = () => {
   return (
     <div className="min-h-screen bg-spotify-black text-white p-4">
       <div className="max-w-4xl mx-auto">
-        {/* Header */}
-        <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold mb-4 text-spotify-green">
-            Spotimatch
-          </h1>
-          <p className="text-xl text-spotify-lightgray">
-            Discover new music based on your top track
-          </p>
-        </div>
-
         {/* Top Track Section */}
         <div className="bg-spotify-darkgray p-6 rounded-lg mb-8">
           <h2 className="text-2xl font-bold mb-4 text-center">

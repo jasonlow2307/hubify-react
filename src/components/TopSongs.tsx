@@ -419,16 +419,6 @@ export const TopSongs: React.FC = () => {
   return (
     <div className="min-h-screen bg-spotify-black text-white p-4">
       <div className="max-w-6xl mx-auto">
-        {/* Header */}
-        <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold mb-4 text-spotify-green">
-            Top Songs Analysis
-          </h1>
-          <p className="text-xl text-spotify-lightgray">
-            Deep dive into your listening habits
-          </p>
-        </div>
-
         {/* Time Range Selector */}
         <div className="bg-spotify-darkgray p-6 rounded-lg mb-8">
           <div className="flex items-center justify-between mb-4">
@@ -620,7 +610,7 @@ export const TopSongs: React.FC = () => {
                 className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors flex items-center gap-2"
               >
                 <RefreshCw size={16} />
-                Load Images
+                Refresh Images
               </button>
             </div>
 

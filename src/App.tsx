@@ -69,8 +69,25 @@ const AppRoutes: React.FC = () => {
           path="/dashboard"
           element={
             <ProtectedRoute>
-              <Layout>
+              <Layout
+                title="Welcome back! 🎵"
+                subtitle="Here's your music overview and available games"
+              >
                 <Dashboard />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/top-songs"
+          element={
+            <ProtectedRoute>
+              <Layout
+                title="Top Songs Analysis"
+                subtitle="Deep dive into your listening habits"
+              >
+                <TopSongs />
               </Layout>
             </ProtectedRoute>
           }
@@ -80,7 +97,10 @@ const AppRoutes: React.FC = () => {
           path="/spotimatch"
           element={
             <ProtectedRoute>
-              <Layout>
+              <Layout
+                title="Spotimatch"
+                subtitle="Discover new music based on your top tracks"
+              >
                 <Spotimatch />
               </Layout>
             </ProtectedRoute>
@@ -91,19 +111,8 @@ const AppRoutes: React.FC = () => {
           path="/gotify"
           element={
             <ProtectedRoute>
-              <Layout>
+              <Layout title="Gotify" subtitle="Guess the Spotify Song!">
                 <Gotify />
-              </Layout>
-            </ProtectedRoute>
-          }
-        />
-
-        <Route
-          path="/top-songs"
-          element={
-            <ProtectedRoute>
-              <Layout>
-                <TopSongs />
               </Layout>
             </ProtectedRoute>
           }
@@ -113,7 +122,10 @@ const AppRoutes: React.FC = () => {
           path="/leaderboard"
           element={
             <ProtectedRoute>
-              <Layout>
+              <Layout
+                title="Gotify Leaderboard"
+                subtitle="See who's the best at guessing songs!"
+              >
                 <Leaderboard />
               </Layout>
             </ProtectedRoute>

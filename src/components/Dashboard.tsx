@@ -78,16 +78,6 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
-      {/* Welcome Section */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-white mb-2">
-          Welcome back, {user?.display_name}! 🎵
-        </h1>
-        <p className="text-spotify-lightgray">
-          Here's your music overview and available games
-        </p>
-      </div>
-
       {/* Games Section */}
       <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <div
