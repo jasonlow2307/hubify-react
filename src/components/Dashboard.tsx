@@ -73,12 +73,11 @@ export const Dashboard: React.FC = () => {
       </div>
     );
   }
-
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
       {/* Games Section */}
-      <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        <div
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+        {/* <div
           onClick={() => navigate("/spotimatch")}
           className="bg-gradient-to-r from-purple-600 to-purple-800 rounded-lg p-6 cursor-pointer hover:from-purple-700 hover:to-purple-900 transition-all"
         >
@@ -93,7 +92,7 @@ export const Dashboard: React.FC = () => {
             <Gamepad2 className="h-4 w-4 mr-2" />
             <span>Play Now</span>
           </div>
-        </div>
+        </div> */}
 
         <div
           onClick={() => navigate("/gotify")}
