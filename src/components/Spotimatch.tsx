@@ -1,7 +1,15 @@
 import React, { useState, useEffect } from "react";
-import { Play, Pause, RefreshCw, Heart, X } from "lucide-react";
+import {
+  Play,
+  Pause,
+  RefreshCw,
+  Heart,
+  X,
+  ExternalLink,
+  Shuffle,
+} from "lucide-react";
 import type { SpotifyTrack, SpotifyArtist } from "../types";
-import { spotifyApi } from "../services/api";
+import { spotifyApi, previewUrlApi } from "../services/api";
 import { useAuth } from "../contexts/AuthContext";
 
 interface TrackWithArtist extends SpotifyTrack {
@@ -12,6 +20,13 @@ interface RecommendationMatch {
   track: SpotifyTrack;
   similarity_score: number;
   reasons: string[];
+  audio_features?: {
+    acousticness: number;
+    danceability: number;
+    energy: number;
+    valence: number;
+    tempo: number;
+  };
 }
 
 export const Spotimatch: React.FC = () => {
@@ -29,6 +44,7 @@ export const Spotimatch: React.FC = () => {
   const [passedTracks, setPassedTracks] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [playlistCreated, setPlaylistCreated] = useState(false);
+  const [enhancingPreviews, setEnhancingPreviews] = useState(false);
 
   useEffect(() => {
     loadTopTrackAndRecommendations();
@@ -41,7 +57,6 @@ export const Spotimatch: React.FC = () => {
       currentIndex >= recommendations.length &&
       recommendations.length > 0
     ) {
-      // All recommendations have been processed
       setCurrentRecommendation(null);
     }
   }, [recommendations, currentIndex]);
@@ -78,48 +93,86 @@ export const Spotimatch: React.FC = () => {
 
       setTopTrack(topTrackWithArtist);
 
-      // Get recommendations based on the top track
-      const recs = await spotifyApi.getRecommendations({
-        seed_tracks: [track.id],
-        limit: 20,
-      });
-
-      // Process recommendations with similarity scores and reasons
-      interface RecommendationProcessor {
-        track: SpotifyTrack;
-        recTrack: SpotifyTrack;
-        artistDetails: SpotifyArtist;
-        reasons: string[];
-        similarity_score: number;
+      // Get audio features for the seed track for better matching
+      let seedAudioFeatures = null;
+      try {
+        const audioFeaturesResponse = await spotifyApi.getAudioFeatures([
+          track.id,
+        ]);
+        seedAudioFeatures = audioFeaturesResponse.audio_features[0];
+      } catch (error) {
+        console.warn("Could not get audio features for seed track:", error);
       }
 
+      // Get recommendations based on the top track with audio features
+      const recParams: any = {
+        seed_tracks: [track.id],
+        limit: 30, // Get more recommendations for better variety
+      };
+
+      // Add audio feature targets if available
+      if (seedAudioFeatures) {
+        recParams.target_energy = seedAudioFeatures.energy;
+        recParams.target_valence = seedAudioFeatures.valence;
+        recParams.target_danceability = seedAudioFeatures.danceability;
+      }
+
+      const recs = await spotifyApi.getRecommendations(recParams);
+
+      // Get audio features for recommendations for better scoring
+      let recAudioFeatures: any = {};
+      try {
+        const recIds = recs.tracks.map((t) => t.id);
+        const audioFeaturesResponse = await spotifyApi.getAudioFeatures(recIds);
+        audioFeaturesResponse.audio_features.forEach((feature) => {
+          if (feature) {
+            recAudioFeatures[feature.id] = feature;
+          }
+        });
+      } catch (error) {
+        console.warn(
+          "Could not get audio features for recommendations:",
+          error
+        );
+      }
+
+      // Process recommendations with enhanced similarity scores
       const processedRecommendations: RecommendationMatch[] = recs.tracks.map(
         (recTrack: SpotifyTrack): RecommendationMatch => {
           const reasons: string[] = generateMatchReasons(
             track,
             recTrack,
-            artistDetails
+            artistDetails,
+            seedAudioFeatures,
+            recAudioFeatures[recTrack.id]
           );
-          const similarity_score: number = calculateSimilarityScore(
+          const similarity_score: number = calculateEnhancedSimilarityScore(
             track,
             recTrack,
-            reasons
+            reasons,
+            seedAudioFeatures,
+            recAudioFeatures[recTrack.id]
           );
 
           return {
             track: recTrack,
             similarity_score,
             reasons,
+            audio_features: recAudioFeatures[recTrack.id],
           };
         }
       );
 
-      // Sort by similarity score
-      processedRecommendations.sort(
-        (a, b) => b.similarity_score - a.similarity_score
-      );
+      // Sort by similarity score and remove duplicates
+      const uniqueRecommendations = processedRecommendations
+        .filter(
+          (rec, index, self) =>
+            index === self.findIndex((r) => r.track.id === rec.track.id)
+        )
+        .sort((a, b) => b.similarity_score - a.similarity_score)
+        .slice(0, 20); // Keep top 20
 
-      setRecommendations(processedRecommendations);
+      setRecommendations(uniqueRecommendations);
       setCurrentIndex(0);
     } catch (error) {
       console.error("Error loading track and recommendations:", error);
@@ -131,7 +184,9 @@ export const Spotimatch: React.FC = () => {
   const generateMatchReasons = (
     seedTrack: SpotifyTrack,
     recTrack: SpotifyTrack,
-    seedArtist: SpotifyArtist
+    seedArtist: SpotifyArtist,
+    seedAudioFeatures?: any,
+    recAudioFeatures?: any
   ): string[] => {
     const reasons: string[] = [];
 
@@ -144,18 +199,35 @@ export const Spotimatch: React.FC = () => {
       reasons.push("Same artist");
     }
 
-    // Check for genre similarity (if available)
+    // Check for genre similarity
     if (seedArtist.genres && seedArtist.genres.length > 0) {
       reasons.push(`Similar to ${seedArtist.genres[0]} genre`);
     }
 
     // Check for popularity similarity
     const popularityDiff = Math.abs(seedTrack.popularity - recTrack.popularity);
-    if (popularityDiff < 20) {
+    if (popularityDiff < 15) {
       reasons.push("Similar popularity level");
     }
 
-    // Check for energy/mood (based on track features - simplified)
+    // Audio features matching
+    if (seedAudioFeatures && recAudioFeatures) {
+      const energyDiff = Math.abs(
+        seedAudioFeatures.energy - recAudioFeatures.energy
+      );
+      const valenceDiff = Math.abs(
+        seedAudioFeatures.valence - recAudioFeatures.valence
+      );
+      const danceabilityDiff = Math.abs(
+        seedAudioFeatures.danceability - recAudioFeatures.danceability
+      );
+
+      if (energyDiff < 0.2) reasons.push("Similar energy level");
+      if (valenceDiff < 0.2) reasons.push("Similar mood/vibe");
+      if (danceabilityDiff < 0.2) reasons.push("Similar danceability");
+    }
+
+    // Check for preview availability
     if (seedTrack.preview_url && recTrack.preview_url) {
       reasons.push("Both have audio previews");
     }
@@ -168,42 +240,93 @@ export const Spotimatch: React.FC = () => {
     return reasons;
   };
 
-  const calculateSimilarityScore = (
+  const calculateEnhancedSimilarityScore = (
     seedTrack: SpotifyTrack,
     recTrack: SpotifyTrack,
-    reasons: string[]
+    reasons: string[],
+    seedAudioFeatures?: any,
+    recAudioFeatures?: any
   ): number => {
     let score = 50; // Base score
 
     // Boost score based on reasons
-    if (reasons.includes("Same artist")) score += 30;
+    if (reasons.includes("Same artist")) score += 40;
     if (reasons.includes("Similar popularity level")) score += 10;
     if (reasons.some((reason) => reason.includes("genre"))) score += 15;
+    if (reasons.includes("Similar energy level")) score += 12;
+    if (reasons.includes("Similar mood/vibe")) score += 12;
+    if (reasons.includes("Similar danceability")) score += 8;
     if (reasons.includes("Both have audio previews")) score += 5;
 
-    // Adjust based on popularity
+    // Audio features similarity bonus
+    if (seedAudioFeatures && recAudioFeatures) {
+      const energyDiff = Math.abs(
+        seedAudioFeatures.energy - recAudioFeatures.energy
+      );
+      const valenceDiff = Math.abs(
+        seedAudioFeatures.valence - recAudioFeatures.valence
+      );
+      const danceabilityDiff = Math.abs(
+        seedAudioFeatures.danceability - recAudioFeatures.danceability
+      );
+
+      const audioSimilarity =
+        1 - (energyDiff + valenceDiff + danceabilityDiff) / 3;
+      score += audioSimilarity * 15;
+    }
+
+    // Adjust based on popularity (not too obscure, not too mainstream)
     const popularityScore = Math.min(recTrack.popularity, 100);
-    score += popularityScore * 0.1;
+    if (popularityScore > 20 && popularityScore < 80) {
+      score += 5;
+    }
 
     return Math.min(score, 100);
   };
 
-  const playTrack = (track: SpotifyTrack) => {
-    if (!track.preview_url) return;
-
+  const playTrack = async (track: SpotifyTrack) => {
     // Stop current audio if playing
     if (audio) {
       audio.pause();
       audio.currentTime = 0;
     }
 
-    const newAudio = new Audio(track.preview_url);
-    setAudio(newAudio);
-    setIsPlaying(true);
+    // If no preview URL, try to find one
+    if (!track.preview_url) {
+      console.log(`No preview URL for ${track.name}, searching...`);
+      try {
+        const previewUrl = await previewUrlApi.findPreviewUrlDeezer(
+          track.artists[0].name,
+          track.name
+        );
 
-    newAudio.play();
-    newAudio.onended = () => setIsPlaying(false);
-    newAudio.onerror = () => setIsPlaying(false);
+        if (previewUrl) {
+          track.preview_url = previewUrl;
+        } else {
+          // No preview found, open in Spotify instead
+          window.open(track.external_urls.spotify, "_blank");
+          return;
+        }
+      } catch (error) {
+        console.error("Failed to find preview URL:", error);
+        window.open(track.external_urls.spotify, "_blank");
+        return;
+      }
+    }
+
+    if (track.preview_url) {
+      const newAudio = new Audio(track.preview_url);
+      setAudio(newAudio);
+      setIsPlaying(true);
+
+      newAudio.play().catch((error) => {
+        console.error("Failed to play audio:", error);
+        setIsPlaying(false);
+      });
+
+      newAudio.onended = () => setIsPlaying(false);
+      newAudio.onerror = () => setIsPlaying(false);
+    }
   };
 
   const pauseTrack = () => {
@@ -215,14 +338,12 @@ export const Spotimatch: React.FC = () => {
 
   const handleLike = () => {
     if (!currentRecommendation) return;
-
     setLikedTracks((prev) => [...prev, currentRecommendation.track.id]);
     nextTrack();
   };
 
   const handlePass = () => {
     if (!currentRecommendation) return;
-
     setPassedTracks((prev) => [...prev, currentRecommendation.track.id]);
     nextTrack();
   };
@@ -232,8 +353,30 @@ export const Spotimatch: React.FC = () => {
       audio.pause();
       setIsPlaying(false);
     }
-
     setCurrentIndex((prev) => prev + 1);
+  };
+
+  const enhanceAllPreviews = async () => {
+    if (enhancingPreviews) return;
+
+    setEnhancingPreviews(true);
+    try {
+      const tracksToEnhance = recommendations.map((rec) => rec.track);
+      const enhancedTracks = await previewUrlApi.enhanceTracksWithPreviewUrls(
+        tracksToEnhance
+      );
+
+      setRecommendations((prev) =>
+        prev.map((rec, index) => ({
+          ...rec,
+          track: enhancedTracks[index] || rec.track,
+        }))
+      );
+    } catch (error) {
+      console.error("Error enhancing previews:", error);
+    } finally {
+      setEnhancingPreviews(false);
+    }
   };
 
   const createPlaylist = async () => {
@@ -247,9 +390,7 @@ export const Spotimatch: React.FC = () => {
         `Tracks you liked based on your top song: ${topTrack?.name}`
       );
 
-      // Add liked tracks to playlist
       await spotifyApi.addTracksToPlaylist(playlist.id, likedTracks);
-
       setPlaylistCreated(true);
     } catch (error) {
       console.error("Error creating playlist:", error);
@@ -302,9 +443,31 @@ export const Spotimatch: React.FC = () => {
       <div className="max-w-4xl mx-auto">
         {/* Top Track Section */}
         <div className="bg-spotify-darkgray p-6 rounded-lg mb-8">
-          <h2 className="text-2xl font-bold mb-4 text-center">
-            Your Top Track
-          </h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-2xl font-bold">Your Top Track</h2>
+            <div className="flex gap-2">
+              <button
+                onClick={enhanceAllPreviews}
+                disabled={enhancingPreviews}
+                className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50"
+              >
+                <RefreshCw
+                  className={`h-4 w-4 ${
+                    enhancingPreviews ? "animate-spin" : ""
+                  }`}
+                />
+                {enhancingPreviews ? "Finding Previews..." : "Find Previews"}
+              </button>
+              <button
+                onClick={refreshRecommendations}
+                className="px-3 py-1 text-sm bg-spotify-green text-black rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2"
+              >
+                <Shuffle size={16} />
+                New Recommendations
+              </button>
+            </div>
+          </div>
+
           <div className="flex items-center gap-6">
             <img
               src={topTrack.album.images[0]?.url}
@@ -325,7 +488,7 @@ export const Spotimatch: React.FC = () => {
                   </p>
                 )}
             </div>
-            <div className="text-center">
+            <div className="flex gap-2">
               <button
                 onClick={() => (isPlaying ? pauseTrack() : playTrack(topTrack))}
                 disabled={!topTrack.preview_url}
@@ -333,9 +496,14 @@ export const Spotimatch: React.FC = () => {
               >
                 {isPlaying ? <Pause size={24} /> : <Play size={24} />}
               </button>
-              {!topTrack.preview_url && (
-                <p className="text-xs text-gray-400 mt-1">No preview</p>
-              )}
+              <button
+                onClick={() =>
+                  window.open(topTrack.external_urls.spotify, "_blank")
+                }
+                className="bg-gray-700 text-white p-3 rounded-full hover:scale-110 transition-transform"
+              >
+                <ExternalLink size={24} />
+              </button>
             </div>
           </div>
         </div>
@@ -386,9 +554,9 @@ export const Spotimatch: React.FC = () => {
                 <div className="text-sm text-spotify-lightgray mb-1">
                   Match Score
                 </div>
-                <div className="w-32 h-2 bg-gray-600 rounded-full mx-auto">
+                <div className="w-32 h-3 bg-gray-600 rounded-full mx-auto">
                   <div
-                    className="h-full bg-spotify-green rounded-full"
+                    className="h-full bg-gradient-to-r from-red-500 via-yellow-500 to-green-500 rounded-full"
                     style={{
                       width: `${currentRecommendation.similarity_score}%`,
                     }}
@@ -419,19 +587,32 @@ export const Spotimatch: React.FC = () => {
 
             {/* Audio Controls */}
             <div className="mb-8">
-              <button
-                onClick={() =>
-                  isPlaying
-                    ? pauseTrack()
-                    : playTrack(currentRecommendation.track)
-                }
-                disabled={!currentRecommendation.track.preview_url}
-                className="bg-spotify-green text-black p-4 rounded-full hover:scale-110 transition-transform disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isPlaying ? <Pause size={32} /> : <Play size={32} />}
-              </button>
+              <div className="flex justify-center gap-4 mb-4">
+                <button
+                  onClick={() =>
+                    isPlaying
+                      ? pauseTrack()
+                      : playTrack(currentRecommendation.track)
+                  }
+                  disabled={!currentRecommendation.track.preview_url}
+                  className="bg-spotify-green text-black p-4 rounded-full hover:scale-110 transition-transform disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isPlaying ? <Pause size={32} /> : <Play size={32} />}
+                </button>
+                <button
+                  onClick={() =>
+                    window.open(
+                      currentRecommendation.track.external_urls.spotify,
+                      "_blank"
+                    )
+                  }
+                  className="bg-gray-700 text-white p-4 rounded-full hover:scale-110 transition-transform"
+                >
+                  <ExternalLink size={32} />
+                </button>
+              </div>
               {!currentRecommendation.track.preview_url && (
-                <p className="text-sm text-gray-400 mt-2">
+                <p className="text-sm text-gray-400">
                   No audio preview available
                 </p>
               )}

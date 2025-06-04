@@ -91,6 +91,7 @@ export interface AuthContextType {
   logout: () => void;
   setToken: (token: string) => void;
   loading: boolean;
+  handleCallback: (code: string) => Promise<void>;
 }
 
 export interface AuthState {

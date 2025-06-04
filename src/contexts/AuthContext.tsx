@@ -154,6 +154,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         logout,
         setToken,
         loading,
+        handleCallback,
       }}
     >
       {children}

@@ -42,11 +42,11 @@ export const Header: React.FC<HeaderProps> = ({
       label: "Top Songs",
       icon: <TrendingUp size={18} />,
     },
-    {
-      path: "/spotimatch",
-      label: "Spotimatch",
-      icon: <Heart size={18} />,
-    },
+    // {
+    //   path: "/spotimatch",
+    //   label: "Spotimatch",
+    //   icon: <Heart size={18} />,
+    // },
     {
       path: "/gotify",
       label: "Gotify",

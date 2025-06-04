@@ -1,7 +1,17 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Play, Pause, RotateCcw, Home, Award } from "lucide-react";
+import {
+  Play,
+  Pause,
+  RotateCcw,
+  Home,
+  Award,
+  Volume2,
+  VolumeX,
+  Clock,
+  Target,
+} from "lucide-react";
 import type { SpotifyTrack } from "../types";
-import { spotifyApi } from "../services/api";
+import { spotifyApi, backendApi, previewUrlApi } from "../services/api";
 import { useAuth } from "../contexts/AuthContext";
 
 interface GameState {
@@ -17,12 +27,23 @@ interface GameState {
   showReveal: boolean;
   tracks: SpotifyTrack[];
   playedTracks: SpotifyTrack[];
+  difficulty: "easy" | "medium" | "hard";
+  maxTurns: number;
+  turnTimeLimit: number;
+  lastGuessResult: "correct" | "partial" | "wrong" | null;
+  streak: number;
+  hints: number;
+  showHint: boolean;
+  volume: number;
 }
 
 interface LeaderboardEntry {
   id: string;
+  player_name: string;
   score: number;
   created_at: string;
+  difficulty: string;
+  streak: number;
 }
 
 export const Gotify: React.FC = () => {
@@ -31,9 +52,9 @@ export const Gotify: React.FC = () => {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   const [gameState, setGameState] = useState<GameState>({
-    score: 10,
+    score: 0,
     turn: 0,
-    timeLeft: 15,
+    timeLeft: 20,
     gameStarted: false,
     gameOver: false,
     showLeaderboard: false,
@@ -43,18 +64,69 @@ export const Gotify: React.FC = () => {
     showReveal: false,
     tracks: [],
     playedTracks: [],
+    difficulty: "medium",
+    maxTurns: 10,
+    turnTimeLimit: 20,
+    lastGuessResult: null,
+    streak: 0,
+    hints: 3,
+    showHint: false,
+    volume: 0.7,
   });
 
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [enhancingTracks, setEnhancingTracks] = useState(false);
+  const [enhancementProgress, setEnhancementProgress] = useState({
+    processed: 0,
+    total: 0,
+  });
+
+  // Difficulty settings
+  const difficultySettings = {
+    easy: { maxTurns: 5, timeLimit: 30, scoreMultiplier: 1, hints: 5 },
+    medium: { maxTurns: 10, timeLimit: 20, scoreMultiplier: 1.5, hints: 3 },
+    hard: { maxTurns: 15, timeLimit: 15, scoreMultiplier: 2, hints: 1 },
+  };
 
   // Load user's top tracks for the game
   useEffect(() => {
     const loadTracks = async () => {
       try {
         setLoading(true);
-        const response = await spotifyApi.getTopTracks("medium_term", 50);
-        setGameState((prev) => ({ ...prev, tracks: response.items }));
+
+        // Get a mix of short, medium, and long term tracks for variety
+        const [shortTerm, mediumTerm, longTerm] = await Promise.all([
+          spotifyApi
+            .getTopTracks("short_term", 20)
+            .catch(() => ({ items: [] })),
+          spotifyApi
+            .getTopTracks("medium_term", 20)
+            .catch(() => ({ items: [] })),
+          spotifyApi.getTopTracks("long_term", 20).catch(() => ({ items: [] })),
+        ]);
+
+        // Combine and deduplicate tracks
+        const allTracks = [
+          ...shortTerm.items,
+          ...mediumTerm.items,
+          ...longTerm.items,
+        ];
+
+        const uniqueTracks = allTracks.filter(
+          (track, index, self) =>
+            index === self.findIndex((t) => t.id === track.id)
+        );
+
+        setGameState((prev) => ({
+          ...prev,
+          tracks: uniqueTracks.slice(0, 50), // Limit to 50 tracks for performance
+        }));
+
+        // Auto-enhance tracks with preview URLs
+        if (uniqueTracks.length > 0) {
+          enhanceTracksWithPreviews(uniqueTracks.slice(0, 50));
+        }
       } catch (error) {
         console.error("Error loading tracks:", error);
       } finally {
@@ -65,17 +137,63 @@ export const Gotify: React.FC = () => {
     loadTracks();
   }, []);
 
+  // Enhanced preview URL finding
+  const enhanceTracksWithPreviews = async (tracks: SpotifyTrack[]) => {
+    setEnhancingTracks(true);
+    try {
+      const tracksWithoutPreviews = tracks.filter(
+        (track) => !track.preview_url
+      );
+
+      if (tracksWithoutPreviews.length === 0) {
+        console.log("All tracks already have preview URLs!");
+        return;
+      }
+
+      setEnhancementProgress({
+        processed: 0,
+        total: tracksWithoutPreviews.length,
+      });
+
+      const enhancedTracks = await previewUrlApi.enhanceTracksWithPreviewUrls(
+        tracks,
+        (processed, total) => {
+          setEnhancementProgress({ processed, total });
+        }
+      );
+
+      setGameState((prev) => ({ ...prev, tracks: enhancedTracks }));
+
+      const finalPreviewCount = enhancedTracks.filter(
+        (t) => t.preview_url
+      ).length;
+      console.log(
+        `🎉 Enhanced tracks: ${finalPreviewCount}/${enhancedTracks.length} now have previews`
+      );
+    } catch (error) {
+      console.error("Error enhancing tracks:", error);
+    } finally {
+      setEnhancingTracks(false);
+      setEnhancementProgress({ processed: 0, total: 0 });
+    }
+  };
+
   // Timer effect
   useEffect(() => {
     if (
       gameState.gameStarted &&
       !gameState.gameOver &&
-      gameState.timeLeft > 0
+      gameState.timeLeft > 0 &&
+      !gameState.showReveal
     ) {
       timerRef.current = setTimeout(() => {
         setGameState((prev) => ({ ...prev, timeLeft: prev.timeLeft - 1 }));
       }, 1000);
-    } else if (gameState.timeLeft === 0 && gameState.gameStarted) {
+    } else if (
+      gameState.timeLeft === 0 &&
+      gameState.gameStarted &&
+      !gameState.showReveal
+    ) {
       handleTimeUp();
     }
 
@@ -84,18 +202,55 @@ export const Gotify: React.FC = () => {
         clearTimeout(timerRef.current);
       }
     };
-  }, [gameState.timeLeft, gameState.gameStarted, gameState.gameOver]);
+  }, [
+    gameState.timeLeft,
+    gameState.gameStarted,
+    gameState.gameOver,
+    gameState.showReveal,
+  ]);
+
+  // Audio volume control
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.volume = gameState.volume;
+    }
+  }, [gameState.volume]);
+
+  const setDifficulty = (difficulty: "easy" | "medium" | "hard") => {
+    const settings = difficultySettings[difficulty];
+    setGameState((prev) => ({
+      ...prev,
+      difficulty,
+      maxTurns: settings.maxTurns,
+      turnTimeLimit: settings.timeLimit,
+      hints: settings.hints,
+    }));
+  };
 
   const startGame = () => {
-    if (gameState.tracks.length === 0) return;
+    const tracksWithPreviews = gameState.tracks.filter(
+      (track) => track.preview_url
+    );
+
+    if (tracksWithPreviews.length < 5) {
+      alert(
+        "Not enough tracks with preview URLs. Please wait for enhancement to complete or try again later."
+      );
+      return;
+    }
 
     setGameState((prev) => ({
       ...prev,
       gameStarted: true,
-      score: 10,
+      score: 0,
       turn: 1,
-      timeLeft: 15,
+      timeLeft: prev.turnTimeLimit,
       playedTracks: [],
+      streak: 0,
+      lastGuessResult: null,
+      showReveal: false,
+      guess: "",
+      showHint: false,
     }));
 
     generateRandomTrack();
@@ -107,7 +262,6 @@ export const Gotify: React.FC = () => {
     );
 
     if (availableTracks.length === 0) {
-      // No more tracks with previews available
       endGame();
       return;
     }
@@ -118,12 +272,20 @@ export const Gotify: React.FC = () => {
     setGameState((prev) => ({
       ...prev,
       currentTrack: randomTrack,
-      timeLeft: 15,
+      timeLeft: prev.turnTimeLimit,
       guess: "",
       showReveal: false,
       isPlaying: false,
+      showHint: false,
+      lastGuessResult: null,
       playedTracks: [...prev.playedTracks, randomTrack],
     }));
+
+    // Stop current audio
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
   };
 
   const playTrack = () => {
@@ -135,11 +297,20 @@ export const Gotify: React.FC = () => {
     }
 
     audioRef.current = new Audio(gameState.currentTrack.preview_url);
-    audioRef.current.play();
+    audioRef.current.volume = gameState.volume;
+    audioRef.current.play().catch((error) => {
+      console.error("Failed to play audio:", error);
+    });
+
     setGameState((prev) => ({ ...prev, isPlaying: true }));
 
     audioRef.current.onended = () => {
       setGameState((prev) => ({ ...prev, isPlaying: false }));
+    };
+
+    audioRef.current.onerror = () => {
+      setGameState((prev) => ({ ...prev, isPlaying: false }));
+      console.error("Audio failed to load");
     };
   };
 
@@ -150,49 +321,142 @@ export const Gotify: React.FC = () => {
     }
   };
 
+  // Enhanced guess checking with fuzzy matching
+  const normalizeString = (str: string): string => {
+    return str
+      .toLowerCase()
+      .replace(/[^\w\s]/g, "") // Remove punctuation
+      .replace(/\s+/g, " ") // Normalize whitespace
+      .trim();
+  };
+
+  const calculateSimilarity = (str1: string, str2: string): number => {
+    const norm1 = normalizeString(str1);
+    const norm2 = normalizeString(str2);
+
+    // Exact match
+    if (norm1 === norm2) return 1;
+
+    // Contains match
+    if (norm1.includes(norm2) || norm2.includes(norm1)) return 0.8;
+
+    // Word-by-word matching
+    const words1 = norm1.split(" ");
+    const words2 = norm2.split(" ");
+    const matchingWords = words1.filter((word) =>
+      words2.some((w) => w.includes(word) || word.includes(w))
+    );
+
+    if (matchingWords.length > 0) {
+      return matchingWords.length / Math.max(words1.length, words2.length);
+    }
+
+    return 0;
+  };
+
   const handleGuess = () => {
     if (!gameState.currentTrack || !gameState.guess.trim()) return;
 
-    const correctAnswer = `${gameState.currentTrack.name} - ${gameState.currentTrack.artists[0].name}`;
-    const guess = gameState.guess.toLowerCase().trim();
-    const trackName = gameState.currentTrack.name.toLowerCase();
-    const artistName = gameState.currentTrack.artists[0].name.toLowerCase();
+    const guess = gameState.guess.trim();
+    const trackName = gameState.currentTrack.name;
+    const artistName = gameState.currentTrack.artists[0].name;
+
+    const trackSimilarity = calculateSimilarity(guess, trackName);
+    const artistSimilarity = calculateSimilarity(guess, artistName);
+    const combinedSimilarity = calculateSimilarity(
+      guess,
+      `${trackName} ${artistName}`
+    );
 
     let isCorrect = false;
-    let newScore = gameState.score;
+    let scoreIncrease = 0;
+    let guessResult: "correct" | "partial" | "wrong" = "wrong";
+    const settings = difficultySettings[gameState.difficulty];
 
-    // Check if guess contains both track name and artist name
-    if (guess.includes(trackName) && guess.includes(artistName)) {
+    // Scoring logic based on similarity
+    if (
+      combinedSimilarity >= 0.8 ||
+      (trackSimilarity >= 0.8 && artistSimilarity >= 0.8)
+    ) {
+      // Perfect or near-perfect match
       isCorrect = true;
-      newScore += 3;
-    } else if (guess.includes(trackName) || guess.includes(artistName)) {
+      guessResult = "correct";
+      scoreIncrease = Math.round(
+        10 * settings.scoreMultiplier * (1 + gameState.streak * 0.1)
+      );
+    } else if (
+      trackSimilarity >= 0.6 ||
+      artistSimilarity >= 0.6 ||
+      combinedSimilarity >= 0.6
+    ) {
+      // Partial match
       isCorrect = true;
-      newScore += 1;
+      guessResult = "partial";
+      scoreIncrease = Math.round(5 * settings.scoreMultiplier);
     } else {
-      newScore -= 1;
+      // Wrong answer
+      guessResult = "wrong";
+      scoreIncrease = -2;
     }
+
+    // Time bonus for quick answers
+    if (isCorrect && gameState.timeLeft > gameState.turnTimeLimit * 0.7) {
+      scoreIncrease += Math.round(3 * settings.scoreMultiplier);
+    }
+
+    // Update streak
+    const newStreak = isCorrect ? gameState.streak + 1 : 0;
 
     setGameState((prev) => ({
       ...prev,
-      score: newScore,
+      score: Math.max(0, prev.score + scoreIncrease),
       showReveal: true,
+      lastGuessResult: guessResult,
+      streak: newStreak,
     }));
 
     // Visual feedback
     const body = document.body;
-    body.style.backgroundColor = isCorrect ? "#1db954" : "#ff0000";
+    if (guessResult === "correct") {
+      body.style.backgroundColor = "#1db954";
+    } else if (guessResult === "partial") {
+      body.style.backgroundColor = "#ff9500";
+    } else {
+      body.style.backgroundColor = "#ff0000";
+    }
 
     setTimeout(() => {
       body.style.backgroundColor = "#121212";
     }, 1000);
+
+    // Stop audio
+    pauseTrack();
+  };
+
+  const useHint = () => {
+    if (gameState.hints <= 0 || gameState.showHint) return;
+
+    setGameState((prev) => ({
+      ...prev,
+      hints: prev.hints - 1,
+      showHint: true,
+      score: Math.max(0, prev.score - 1), // Small penalty for using hint
+    }));
   };
 
   const handleReveal = () => {
-    setGameState((prev) => ({ ...prev, showReveal: true }));
+    setGameState((prev) => ({
+      ...prev,
+      showReveal: true,
+      lastGuessResult: "wrong",
+      score: Math.max(0, prev.score - 3), // Penalty for revealing
+      streak: 0,
+    }));
+    pauseTrack();
   };
 
   const nextTurn = () => {
-    if (gameState.turn >= 5) {
+    if (gameState.turn >= gameState.maxTurns) {
       endGame();
       return;
     }
@@ -202,6 +466,7 @@ export const Gotify: React.FC = () => {
       turn: prev.turn + 1,
       showReveal: false,
       guess: "",
+      showHint: false,
     }));
 
     generateRandomTrack();
@@ -210,9 +475,12 @@ export const Gotify: React.FC = () => {
   const handleTimeUp = () => {
     setGameState((prev) => ({
       ...prev,
-      score: prev.score - 1,
+      score: Math.max(0, prev.score - 2),
       showReveal: true,
+      lastGuessResult: "wrong",
+      streak: 0,
     }));
+    pauseTrack();
   };
 
   const endGame = async () => {
@@ -222,19 +490,19 @@ export const Gotify: React.FC = () => {
 
     setGameState((prev) => ({ ...prev, gameOver: true, isPlaying: false }));
 
-    // Save score
+    // Save score to backend
     if (user) {
       try {
-        await fetch("/api/save_score", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            player_name: user.display_name,
-            score: gameState.score,
-          }),
-        });
+        await backendApi.saveScore(
+          user.display_name || user.id,
+          gameState.score,
+          "gotify",
+          {
+            difficulty: gameState.difficulty,
+            streak: gameState.streak,
+            turns_completed: gameState.turn,
+          }
+        );
       } catch (error) {
         console.error("Error saving score:", error);
       }
@@ -248,9 +516,9 @@ export const Gotify: React.FC = () => {
 
     setGameState((prev) => ({
       ...prev,
-      score: 10,
+      score: 0,
       turn: 0,
-      timeLeft: 15,
+      timeLeft: prev.turnTimeLimit,
       gameStarted: false,
       gameOver: false,
       showLeaderboard: false,
@@ -259,14 +527,17 @@ export const Gotify: React.FC = () => {
       guess: "",
       showReveal: false,
       playedTracks: [],
+      lastGuessResult: null,
+      streak: 0,
+      showHint: false,
+      hints: difficultySettings[prev.difficulty].hints,
     }));
   };
 
   const showLeaderboardData = async () => {
     try {
-      const response = await fetch("/api/leaderboard");
-      const data = await response.json();
-      setLeaderboard(data.Items || []);
+      const response = await backendApi.getLeaderboard("gotify");
+      setLeaderboard(response.leaderboard || []);
       setGameState((prev) => ({ ...prev, showLeaderboard: true }));
     } catch (error) {
       console.error("Error fetching leaderboard:", error);
@@ -279,6 +550,28 @@ export const Gotify: React.FC = () => {
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-spotify-green mx-auto mb-4"></div>
           <p className="text-white">Loading your tracks...</p>
+          {enhancingTracks && (
+            <div className="mt-4">
+              <p className="text-spotify-lightgray text-sm">
+                Finding preview URLs... {enhancementProgress.processed}/
+                {enhancementProgress.total}
+              </p>
+              <div className="w-64 h-2 bg-gray-600 rounded-full mx-auto mt-2">
+                <div
+                  className="h-full bg-spotify-green rounded-full transition-all"
+                  style={{
+                    width: `${
+                      enhancementProgress.total > 0
+                        ? (enhancementProgress.processed /
+                            enhancementProgress.total) *
+                          100
+                        : 0
+                    }%`,
+                  }}
+                ></div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -286,10 +579,10 @@ export const Gotify: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-spotify-black text-white p-4">
-      <div className="max-w-2xl mx-auto">
+      <div className="max-w-4xl mx-auto">
         {/* Game Start Screen */}
         {!gameState.gameStarted && !gameState.gameOver && (
-          <div className="text-center bg-spotify-darkgray p-8 rounded-lg">
+          <div className="text-center bg-spotify-darkgray p-8 rounded-lg space-y-6">
             <h1 className="text-4xl font-bold mb-4 text-spotify-green">
               Gotify
             </h1>
@@ -298,19 +591,135 @@ export const Gotify: React.FC = () => {
               Listen to short clips of your top tracks and guess the song and
               artist.
               <br />
-              You have 15 seconds per track and 5 turns total.
+              Score points for correct guesses and build up streaks for bonus
+              points!
             </p>
+
+            {/* Track Statistics */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+              <div className="bg-gray-700 p-4 rounded-lg">
+                <div className="text-2xl font-bold text-spotify-green">
+                  {gameState.tracks.length}
+                </div>
+                <div className="text-sm text-spotify-lightgray">
+                  Total Tracks
+                </div>
+              </div>
+              <div className="bg-gray-700 p-4 rounded-lg">
+                <div className="text-2xl font-bold text-blue-400">
+                  {gameState.tracks.filter((t) => t.preview_url).length}
+                </div>
+                <div className="text-sm text-spotify-lightgray">
+                  With Previews
+                </div>
+              </div>
+              <div className="bg-gray-700 p-4 rounded-lg">
+                <div className="text-2xl font-bold text-yellow-400">
+                  {gameState.maxTurns}
+                </div>
+                <div className="text-sm text-spotify-lightgray">Max Turns</div>
+              </div>
+              <div className="bg-gray-700 p-4 rounded-lg">
+                <div className="text-2xl font-bold text-purple-400">
+                  {gameState.turnTimeLimit}s
+                </div>
+                <div className="text-sm text-spotify-lightgray">Time Limit</div>
+              </div>
+            </div>
+
+            {/* Difficulty Selection */}
+            <div className="mb-8">
+              <h3 className="text-lg font-bold mb-4">Choose Difficulty</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {Object.entries(difficultySettings).map(([key, settings]) => (
+                  <button
+                    key={key}
+                    onClick={() =>
+                      setDifficulty(key as "easy" | "medium" | "hard")
+                    }
+                    className={`p-4 rounded-lg border-2 transition-all ${
+                      gameState.difficulty === key
+                        ? "border-spotify-green bg-spotify-green/20"
+                        : "border-gray-600 hover:border-gray-400"
+                    }`}
+                  >
+                    <div className="font-bold text-lg capitalize">{key}</div>
+                    <div className="text-sm text-spotify-lightgray mt-1">
+                      {settings.maxTurns} turns • {settings.timeLimit}s each
+                    </div>
+                    <div className="text-sm text-spotify-lightgray">
+                      {settings.hints} hints • {settings.scoreMultiplier}x score
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Volume Control */}
+            <div className="mb-8">
+              <div className="flex items-center gap-4 justify-center">
+                <VolumeX size={20} />
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.1"
+                  value={gameState.volume}
+                  onChange={(e) =>
+                    setGameState((prev) => ({
+                      ...prev,
+                      volume: parseFloat(e.target.value),
+                    }))
+                  }
+                  className="w-32"
+                />
+                <Volume2 size={20} />
+                <span className="text-sm">
+                  {Math.round(gameState.volume * 100)}%
+                </span>
+              </div>
+            </div>
+
             <button
               onClick={startGame}
-              disabled={gameState.tracks.length === 0}
+              disabled={
+                gameState.tracks.filter((t) => t.preview_url).length < 5
+              }
               className="bg-spotify-green text-black font-bold py-3 px-8 rounded-full hover:scale-105 transition-transform disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Start Game
             </button>
-            {gameState.tracks.length === 0 && (
+
+            {gameState.tracks.filter((t) => t.preview_url).length < 5 && (
               <p className="text-red-400 mt-4">
-                No tracks available. Please try again later.
+                Not enough tracks with preview URLs.
+                {enhancingTracks
+                  ? " Please wait for enhancement to complete."
+                  : " Try refreshing the page."}
               </p>
+            )}
+
+            {enhancingTracks && (
+              <div className="mt-4">
+                <p className="text-spotify-lightgray text-sm mb-2">
+                  Finding preview URLs... {enhancementProgress.processed}/
+                  {enhancementProgress.total}
+                </p>
+                <div className="w-64 h-2 bg-gray-600 rounded-full mx-auto">
+                  <div
+                    className="h-full bg-spotify-green rounded-full transition-all"
+                    style={{
+                      width: `${
+                        enhancementProgress.total > 0
+                          ? (enhancementProgress.processed /
+                              enhancementProgress.total) *
+                            100
+                          : 0
+                      }%`,
+                    }}
+                  ></div>
+                </div>
+              </div>
             )}
           </div>
         )}
@@ -321,125 +730,271 @@ export const Gotify: React.FC = () => {
           gameState.currentTrack && (
             <div className="space-y-6">
               {/* Header */}
-              <div className="flex justify-between items-center">
-                <div className="text-xl font-bold">
-                  Turn {gameState.turn}/5 | Score: {gameState.score}
-                </div>
-                <div className="text-right">
-                  <div className="text-lg">Time: {gameState.timeLeft}s</div>
-                  <div className="w-32 h-2 bg-gray-600 rounded-full mt-1">
-                    <div
-                      className="h-full bg-spotify-green rounded-full transition-all duration-1000"
-                      style={{ width: `${(gameState.timeLeft / 15) * 100}%` }}
-                    ></div>
+              <div className="bg-spotify-darkgray p-6 rounded-lg">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-center">
+                  <div>
+                    <div className="text-2xl font-bold text-spotify-green">
+                      {gameState.turn}
+                    </div>
+                    <div className="text-sm text-spotify-lightgray">Turn</div>
                   </div>
+                  <div>
+                    <div className="text-2xl font-bold text-yellow-400">
+                      {gameState.score}
+                    </div>
+                    <div className="text-sm text-spotify-lightgray">Score</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-purple-400">
+                      {gameState.streak}
+                    </div>
+                    <div className="text-sm text-spotify-lightgray">Streak</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-blue-400">
+                      {gameState.hints}
+                    </div>
+                    <div className="text-sm text-spotify-lightgray">Hints</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-red-400">
+                      {gameState.timeLeft}
+                    </div>
+                    <div className="text-sm text-spotify-lightgray">Time</div>
+                  </div>
+                </div>
+
+                {/* Time Progress Bar */}
+                <div className="w-full h-3 bg-gray-600 rounded-full mt-4">
+                  <div
+                    className={`h-full rounded-full transition-all duration-1000 ${
+                      gameState.timeLeft <= 5
+                        ? "bg-red-500"
+                        : "bg-spotify-green"
+                    }`}
+                    style={{
+                      width: `${
+                        (gameState.timeLeft / gameState.turnTimeLimit) * 100
+                      }%`,
+                    }}
+                  ></div>
                 </div>
               </div>
 
-              {/* Track Image */}
-              <div className="text-center">
+              {/* Track Display */}
+              <div className="text-center bg-spotify-darkgray p-8 rounded-lg">
                 <img
                   src={gameState.currentTrack.album.images[0]?.url}
                   alt="Album cover"
-                  className="w-64 h-64 mx-auto rounded-lg shadow-lg"
+                  className="w-64 h-64 mx-auto rounded-lg shadow-lg mb-6"
                 />
-              </div>
 
-              {/* Audio Controls */}
-              <div className="text-center">
-                <button
-                  onClick={gameState.isPlaying ? pauseTrack : playTrack}
-                  className="bg-spotify-green text-black p-4 rounded-full hover:scale-110 transition-transform"
-                >
-                  {gameState.isPlaying ? (
-                    <Pause size={24} />
-                  ) : (
-                    <Play size={24} />
-                  )}
-                </button>
-              </div>
-
-              {/* Guess Input */}
-              {!gameState.showReveal && (
-                <div className="space-y-4">
-                  <input
-                    type="text"
-                    value={gameState.guess}
-                    onChange={(e) =>
-                      setGameState((prev) => ({
-                        ...prev,
-                        guess: e.target.value,
-                      }))
-                    }
-                    placeholder="Enter song name and artist..."
-                    className="w-full p-3 bg-spotify-darkgray border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:border-spotify-green focus:outline-none"
-                    onKeyPress={(e) => e.key === "Enter" && handleGuess()}
-                  />
-                  <div className="flex gap-4 justify-center">
-                    <button
-                      onClick={handleGuess}
-                      className="bg-spotify-green text-black font-bold py-2 px-6 rounded-full hover:scale-105 transition-transform"
-                    >
-                      Guess
-                    </button>
-                    <button
-                      onClick={handleReveal}
-                      className="bg-gray-600 text-white font-bold py-2 px-6 rounded-full hover:scale-105 transition-transform"
-                    >
-                      Reveal
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Reveal */}
-              {gameState.showReveal && (
-                <div className="text-center space-y-4">
-                  <div className="bg-spotify-darkgray p-4 rounded-lg">
-                    <h3 className="text-xl font-bold text-spotify-green mb-2">
-                      Correct Answer:
-                    </h3>
-                    <p className="text-lg">{gameState.currentTrack.name}</p>
-                    <p className="text-spotify-lightgray">
-                      by {gameState.currentTrack.artists[0].name}
+                {/* Hint Display */}
+                {gameState.showHint && (
+                  <div className="mb-4 p-4 bg-yellow-600/20 border border-yellow-600 rounded-lg">
+                    <p className="text-yellow-400 font-bold">Hint:</p>
+                    <p className="text-white">
+                      Album: {gameState.currentTrack.album.name}
+                    </p>
+                    <p className="text-spotify-lightgray text-sm">
+                      Released:{" "}
+                      {new Date(
+                        gameState.currentTrack.album.release_date
+                      ).getFullYear()}
                     </p>
                   </div>
+                )}
+
+                {/* Audio Controls */}
+                <div className="flex justify-center gap-4 mb-6">
                   <button
-                    onClick={nextTurn}
-                    className="bg-spotify-green text-black font-bold py-2 px-6 rounded-full hover:scale-105 transition-transform"
+                    onClick={gameState.isPlaying ? pauseTrack : playTrack}
+                    className="bg-spotify-green text-black p-4 rounded-full hover:scale-110 transition-transform"
                   >
-                    {gameState.turn >= 5 ? "Finish Game" : "Next Track"}
+                    {gameState.isPlaying ? (
+                      <Pause size={32} />
+                    ) : (
+                      <Play size={32} />
+                    )}
                   </button>
+
+                  {gameState.hints > 0 && !gameState.showHint && (
+                    <button
+                      onClick={useHint}
+                      className="bg-yellow-600 text-white p-4 rounded-full hover:scale-110 transition-transform"
+                      title="Use a hint (-1 point)"
+                    >
+                      💡
+                    </button>
+                  )}
                 </div>
-              )}
+
+                {/* Guess Input */}
+                {!gameState.showReveal && (
+                  <div className="space-y-4 max-w-md mx-auto">
+                    <input
+                      type="text"
+                      value={gameState.guess}
+                      onChange={(e) =>
+                        setGameState((prev) => ({
+                          ...prev,
+                          guess: e.target.value,
+                        }))
+                      }
+                      placeholder="Enter song name and artist..."
+                      className="w-full p-4 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:border-spotify-green focus:outline-none text-lg"
+                      onKeyPress={(e) => e.key === "Enter" && handleGuess()}
+                      autoFocus
+                    />
+                    <div className="flex gap-4 justify-center">
+                      <button
+                        onClick={handleGuess}
+                        disabled={!gameState.guess.trim()}
+                        className="bg-spotify-green text-black font-bold py-3 px-8 rounded-full hover:scale-105 transition-transform disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Submit Guess
+                      </button>
+                      <button
+                        onClick={handleReveal}
+                        className="bg-red-600 text-white font-bold py-3 px-8 rounded-full hover:scale-105 transition-transform"
+                        title="Give up (-3 points)"
+                      >
+                        Give Up
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Reveal */}
+                {gameState.showReveal && (
+                  <div className="space-y-6 max-w-md mx-auto">
+                    {/* Result Badge */}
+                    {gameState.lastGuessResult && (
+                      <div
+                        className={`p-4 rounded-lg ${
+                          gameState.lastGuessResult === "correct"
+                            ? "bg-green-600/20 border border-green-600"
+                            : gameState.lastGuessResult === "partial"
+                            ? "bg-yellow-600/20 border border-yellow-600"
+                            : "bg-red-600/20 border border-red-600"
+                        }`}
+                      >
+                        <div
+                          className={`font-bold text-lg ${
+                            gameState.lastGuessResult === "correct"
+                              ? "text-green-400"
+                              : gameState.lastGuessResult === "partial"
+                              ? "text-yellow-400"
+                              : "text-red-400"
+                          }`}
+                        >
+                          {gameState.lastGuessResult === "correct"
+                            ? "🎉 Perfect!"
+                            : gameState.lastGuessResult === "partial"
+                            ? "⚡ Close!"
+                            : "❌ Wrong"}
+                        </div>
+                        {gameState.guess && (
+                          <div className="text-sm text-gray-300 mt-1">
+                            Your guess: "{gameState.guess}"
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Correct Answer */}
+                    <div className="bg-spotify-darkgray p-6 rounded-lg border border-spotify-green">
+                      <h3 className="text-xl font-bold text-spotify-green mb-3">
+                        Correct Answer:
+                      </h3>
+                      <p className="text-xl font-bold">
+                        {gameState.currentTrack.name}
+                      </p>
+                      <p className="text-lg text-spotify-lightgray">
+                        by {gameState.currentTrack.artists[0].name}
+                      </p>
+                      <p className="text-sm text-gray-400 mt-2">
+                        Album: {gameState.currentTrack.album.name} (
+                        {new Date(
+                          gameState.currentTrack.album.release_date
+                        ).getFullYear()}
+                        )
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={nextTurn}
+                      className="bg-spotify-green text-black font-bold py-3 px-8 rounded-full hover:scale-105 transition-transform"
+                    >
+                      {gameState.turn >= gameState.maxTurns
+                        ? "Finish Game"
+                        : "Next Track"}
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
         {/* Game Over Screen */}
         {gameState.gameOver && !gameState.showLeaderboard && (
           <div className="text-center bg-spotify-darkgray p-8 rounded-lg space-y-6">
-            <h2 className="text-3xl font-bold text-spotify-green">
+            <h2 className="text-4xl font-bold text-spotify-green mb-4">
               Game Over!
             </h2>
-            <p className="text-2xl">Final Score: {gameState.score}</p>
-            <div className="flex gap-4 justify-center">
+
+            {/* Final Stats */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              <div className="bg-gray-700 p-4 rounded-lg">
+                <div className="text-3xl font-bold text-spotify-green">
+                  {gameState.score}
+                </div>
+                <div className="text-sm text-spotify-lightgray">
+                  Final Score
+                </div>
+              </div>
+              <div className="bg-gray-700 p-4 rounded-lg">
+                <div className="text-3xl font-bold text-purple-400">
+                  {gameState.streak}
+                </div>
+                <div className="text-sm text-spotify-lightgray">
+                  Best Streak
+                </div>
+              </div>
+              <div className="bg-gray-700 p-4 rounded-lg">
+                <div className="text-3xl font-bold text-yellow-400">
+                  {gameState.turn}
+                </div>
+                <div className="text-sm text-spotify-lightgray">
+                  Turns Played
+                </div>
+              </div>
+              <div className="bg-gray-700 p-4 rounded-lg">
+                <div className="text-3xl font-bold text-blue-400 capitalize">
+                  {gameState.difficulty}
+                </div>
+                <div className="text-sm text-spotify-lightgray">Difficulty</div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-4 justify-center">
               <button
                 onClick={restartGame}
-                className="bg-spotify-green text-black font-bold py-2 px-6 rounded-full hover:scale-105 transition-transform flex items-center gap-2"
+                className="bg-spotify-green text-black font-bold py-3 px-6 rounded-full hover:scale-105 transition-transform flex items-center gap-2"
               >
                 <RotateCcw size={20} />
                 Play Again
               </button>
               <button
                 onClick={showLeaderboardData}
-                className="bg-blue-600 text-white font-bold py-2 px-6 rounded-full hover:scale-105 transition-transform flex items-center gap-2"
+                className="bg-blue-600 text-white font-bold py-3 px-6 rounded-full hover:scale-105 transition-transform flex items-center gap-2"
               >
                 <Award size={20} />
                 Leaderboard
               </button>
               <button
                 onClick={() => (window.location.href = "/dashboard")}
-                className="bg-gray-600 text-white font-bold py-2 px-6 rounded-full hover:scale-105 transition-transform flex items-center gap-2"
+                className="bg-gray-600 text-white font-bold py-3 px-6 rounded-full hover:scale-105 transition-transform flex items-center gap-2"
               >
                 <Home size={20} />
                 Home
@@ -448,30 +1003,66 @@ export const Gotify: React.FC = () => {
           </div>
         )}
 
-        {/* Leaderboard */}
+        {/* Enhanced Leaderboard */}
         {gameState.showLeaderboard && (
           <div className="bg-spotify-darkgray p-8 rounded-lg">
             <h2 className="text-3xl font-bold text-spotify-green mb-6 text-center">
-              Leaderboard
+              🏆 Gotify Leaderboard
             </h2>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left">
-                <thead>
-                  <tr className="border-b border-gray-600">
-                    <th className="py-2 px-4">Player</th>
-                    <th className="py-2 px-4">Score</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {leaderboard.map((entry, index) => (
-                    <tr key={index} className="border-b border-gray-700">
-                      <td className="py-2 px-4">{entry.id}</td>
-                      <td className="py-2 px-4">{entry.score}</td>
+
+            {leaderboard.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="border-b border-gray-600">
+                      <th className="py-3 px-4">#</th>
+                      <th className="py-3 px-4">Player</th>
+                      <th className="py-3 px-4">Score</th>
+                      <th className="py-3 px-4">Difficulty</th>
+                      <th className="py-3 px-4">Best Streak</th>
+                      <th className="py-3 px-4">Date</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {leaderboard.map((entry, index) => (
+                      <tr
+                        key={`${entry.player_name}-${entry.created_at}`}
+                        className={`border-b border-gray-700 ${
+                          entry.player_name === user?.display_name
+                            ? "bg-spotify-green/10"
+                            : ""
+                        }`}
+                      >
+                        <td className="py-3 px-4 font-bold">
+                          {index + 1}
+                          {index === 0 && " 🥇"}
+                          {index === 1 && " 🥈"}
+                          {index === 2 && " 🥉"}
+                        </td>
+                        <td className="py-3 px-4">{entry.player_name}</td>
+                        <td className="py-3 px-4 font-bold text-spotify-green">
+                          {entry.score}
+                        </td>
+                        <td className="py-3 px-4 capitalize">
+                          {entry.difficulty || "medium"}
+                        </td>
+                        <td className="py-3 px-4">{entry.streak || 0}</td>
+                        <td className="py-3 px-4 text-sm text-gray-400">
+                          {new Date(entry.created_at).toLocaleDateString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-center py-8">
+                <p className="text-spotify-lightgray">
+                  No scores yet. Be the first to play!
+                </p>
+              </div>
+            )}
+
             <div className="text-center mt-6">
               <button
                 onClick={() =>

@@ -15,7 +15,7 @@ export const Layout: React.FC<LayoutProps> = ({
   title,
   subtitle,
 }) => {
-  const { user, logout, isAuthenticated } = useAuth();
+  const { isAuthenticated } = useAuth();
 
   return (
     <div className="min-h-screen bg-spotify-black text-white">

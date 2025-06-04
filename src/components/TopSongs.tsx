@@ -228,7 +228,7 @@ export const TopSongs: React.FC = () => {
       const DELAY_BETWEEN_REQUESTS = 600; // Delay between individual requests
 
       for (let i = 0; i < tracksNeedingPreview.length; i++) {
-        const { track, index } = tracksNeedingPreview[i];
+        const { track } = tracksNeedingPreview[i];
 
         try {
           console.log(
@@ -619,7 +619,7 @@ export const TopSongs: React.FC = () => {
               <div className="flex items-end justify-center gap-6 mb-4">
                 {getArtistFrequency()
                   .slice(0, 3)
-                  .map((artist, index) => {
+                  .map((_artist, index) => {
                     // Fix the positions and heights mapping
                     // index 0 = 1st place, index 1 = 2nd place, index 2 = 3rd place
                     // But we want to display them as: 2nd, 1st, 3rd (left to right)

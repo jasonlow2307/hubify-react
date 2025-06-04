@@ -15,7 +15,6 @@ import {
 } from "lucide-react";
 
 export const Dashboard: React.FC = () => {
-  const { user } = useAuth();
   const navigate = useNavigate();
   const [topTracks, setTopTracks] = useState<SpotifyTrack[]>([]);
   const [recentTracks, setRecentTracks] = useState<SpotifyTrack[]>([]);

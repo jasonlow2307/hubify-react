@@ -69,7 +69,6 @@ spotifyClient.interceptors.response.use(
   }
 );
 
-// ... rest of the spotifyApi remains the same ...
 export const spotifyApi = {
   // Get current user profile
   getCurrentUser: async (): Promise<SpotifyUser> => {
@@ -123,30 +122,154 @@ export const spotifyApi = {
     }
   },
 
-  // ... rest of spotify methods remain the same ...
+  // Get recommendations based on seed tracks, artists, or genres
+  getRecommendations: async (params: {
+    seed_tracks?: string[];
+    seed_artists?: string[];
+    seed_genres?: string[];
+    limit?: number;
+    market?: string;
+    target_acousticness?: number;
+    target_danceability?: number;
+    target_energy?: number;
+    target_valence?: number;
+  }): Promise<{ tracks: SpotifyTrack[] }> => {
+    try {
+      const response = await spotifyClient.get("/recommendations", {
+        params: {
+          ...params,
+          seed_tracks: params.seed_tracks?.join(","),
+          seed_artists: params.seed_artists?.join(","),
+          seed_genres: params.seed_genres?.join(","),
+        },
+      });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching recommendations:", error);
+      throw new Error("Failed to fetch recommendations");
+    }
+  },
+
+  // Create a new playlist
+  createPlaylist: async (
+    userId: string,
+    name: string,
+    description?: string,
+    isPublic: boolean = false
+  ): Promise<{
+    id: string;
+    name: string;
+    external_urls: { spotify: string };
+  }> => {
+    try {
+      const response = await spotifyClient.post(`/users/${userId}/playlists`, {
+        name,
+        description,
+        public: isPublic,
+      });
+      return response.data;
+    } catch (error) {
+      console.error("Error creating playlist:", error);
+      throw new Error("Failed to create playlist");
+    }
+  },
+
+  // Add tracks to a playlist
+  addTracksToPlaylist: async (
+    playlistId: string,
+    trackIds: string[]
+  ): Promise<{ snapshot_id: string }> => {
+    try {
+      const trackUris = trackIds.map((id) => `spotify:track:${id}`);
+      const response = await spotifyClient.post(
+        `/playlists/${playlistId}/tracks`,
+        {
+          uris: trackUris,
+        }
+      );
+      return response.data;
+    } catch (error) {
+      console.error("Error adding tracks to playlist:", error);
+      throw new Error("Failed to add tracks to playlist");
+    }
+  },
+
+  // Get audio features for tracks (for better matching)
+  getAudioFeatures: async (
+    trackIds: string[]
+  ): Promise<{
+    audio_features: Array<{
+      id: string;
+      acousticness: number;
+      danceability: number;
+      energy: number;
+      valence: number;
+      tempo: number;
+    }>;
+  }> => {
+    try {
+      const response = await spotifyClient.get("/audio-features", {
+        params: {
+          ids: trackIds.join(","),
+        },
+      });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching audio features:", error);
+      throw new Error("Failed to fetch audio features");
+    }
+  },
+
+  // Get available genre seeds
+  getAvailableGenreSeeds: async (): Promise<{ genres: string[] }> => {
+    try {
+      const response = await spotifyClient.get(
+        "/recommendations/available-genre-seeds"
+      );
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching genre seeds:", error);
+      throw new Error("Failed to fetch genre seeds");
+    }
+  },
 };
 
 // Mock backend API for development (replace with real backend later)
 export const backendApi = {
-  // Save game score (mock implementation using localStorage)
   saveScore: async (
     playerName: string,
     score: number,
-    gameType: "gotify" | "spotimatch" = "gotify"
+    gameType: "gotify" | "spotimatch" = "gotify",
+    metadata?: {
+      difficulty?: string;
+      streak?: number;
+      turns_completed?: number;
+      accuracy?: number;
+    }
   ): Promise<{ success: boolean; message: string }> => {
     try {
-      // Mock implementation using localStorage
+      // For development: use localStorage
       const scores = JSON.parse(localStorage.getItem("game_scores") || "[]");
       const newScore = {
         id: Date.now(),
         player_name: playerName,
         score,
         game_type: gameType,
+        difficulty: metadata?.difficulty || "medium",
+        streak: metadata?.streak || 0,
+        turns_completed: metadata?.turns_completed || 0,
+        accuracy: metadata?.accuracy || 0,
         created_at: new Date().toISOString(),
       };
-      scores.push(newScore);
-      localStorage.setItem("game_scores", JSON.stringify(scores));
 
+      scores.push(newScore);
+
+      // Keep only top 100 scores to prevent localStorage bloat
+      scores.sort((a: any, b: any) => b.score - a.score);
+      const topScores = scores.slice(0, 100);
+      localStorage.setItem("game_scores", JSON.stringify(topScores));
+
+      console.log("Score saved:", newScore);
       return { success: true, message: "Score saved successfully!" };
     } catch (error) {
       console.error("Error saving score:", error);
@@ -154,33 +277,100 @@ export const backendApi = {
     }
   },
 
-  // Get leaderboard (mock implementation using localStorage)
+  // Enhanced leaderboard with filtering and sorting
   getLeaderboard: async (
-    gameType?: "gotify" | "spotimatch"
-  ): Promise<LeaderboardResponse> => {
+    gameType?: "gotify" | "spotimatch",
+    difficulty?: string,
+    limit: number = 10
+  ): Promise<{
+    leaderboard: LeaderboardEntry[];
+    Items: LeaderboardEntry[];
+    Count: number;
+  }> => {
     try {
-      // Mock implementation using localStorage
       const scores = JSON.parse(localStorage.getItem("game_scores") || "[]");
       let filteredScores = scores;
 
+      // Filter by game type
       if (gameType) {
-        filteredScores = scores.filter(
+        filteredScores = filteredScores.filter(
           (score: any) => score.game_type === gameType
         );
       }
 
-      // Sort by score descending and take top 10
-      const Items = filteredScores
-        .sort((a: any, b: any) => b.score - a.score)
-        .slice(0, 10);
+      // Filter by difficulty
+      if (difficulty) {
+        filteredScores = filteredScores.filter(
+          (score: any) => score.difficulty === difficulty
+        );
+      }
 
-      return { Items, Count: Items.length, leaderboard: Items };
+      // Sort by score descending, then by streak, then by date
+      const sortedScores = filteredScores
+        .sort((a: any, b: any) => {
+          if (b.score !== a.score) return b.score - a.score;
+          if (b.streak !== a.streak) return b.streak - a.streak;
+          return (
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          );
+        })
+        .slice(0, limit);
+
+      return {
+        leaderboard: sortedScores,
+        Items: sortedScores,
+        Count: sortedScores.length,
+      };
     } catch (error) {
       console.error("Error fetching leaderboard:", error);
       return { leaderboard: [], Items: [], Count: 0 };
     }
   },
 
+  // Get user's personal best scores
+  getUserStats: async (
+    playerName: string,
+    gameType?: "gotify" | "spotimatch"
+  ): Promise<{
+    bestScore: number;
+    bestStreak: number;
+    totalGames: number;
+    averageScore: number;
+  }> => {
+    try {
+      const scores = JSON.parse(localStorage.getItem("game_scores") || "[]");
+      let userScores = scores.filter(
+        (score: any) => score.player_name === playerName
+      );
+
+      if (gameType) {
+        userScores = userScores.filter(
+          (score: any) => score.game_type === gameType
+        );
+      }
+
+      if (userScores.length === 0) {
+        return { bestScore: 0, bestStreak: 0, totalGames: 0, averageScore: 0 };
+      }
+
+      const bestScore = Math.max(...userScores.map((s: any) => s.score));
+      const bestStreak = Math.max(...userScores.map((s: any) => s.streak || 0));
+      const totalGames = userScores.length;
+      const averageScore =
+        userScores.reduce((sum: number, s: any) => sum + s.score, 0) /
+        totalGames;
+
+      return {
+        bestScore,
+        bestStreak,
+        totalGames,
+        averageScore: Math.round(averageScore),
+      };
+    } catch (error) {
+      console.error("Error fetching user stats:", error);
+      return { bestScore: 0, bestStreak: 0, totalGames: 0, averageScore: 0 };
+    }
+  },
   // Check if user is registered (mock - always return true for now)
   checkUserRegistration: async (email: string): Promise<boolean> => {
     try {
