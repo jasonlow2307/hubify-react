@@ -37,6 +37,8 @@ interface GameState {
   initialTracksLoaded: boolean;
   backgroundLoadingComplete: boolean;
   totalAvailableTracks: number;
+  // Store last score earned for display
+  lastScoreEarned: number;
 }
 
 interface LeaderboardEntry {
@@ -73,11 +75,11 @@ export const Gotify: React.FC = () => {
     streak: 0,
     hints: 3,
     showHint: false,
-    volume: 0.7,
-    // New initial values
+    volume: 0.7, // New initial values
     initialTracksLoaded: false,
     backgroundLoadingComplete: false,
     totalAvailableTracks: 0,
+    lastScoreEarned: 0,
   });
 
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
@@ -142,7 +144,8 @@ export const Gotify: React.FC = () => {
     };
 
     loadInitialTracks();
-  }, []);  const enhanceInitialTracksQuickly = async (tracks: SpotifyTrack[]) => {
+  }, []);
+  const enhanceInitialTracksQuickly = async (tracks: SpotifyTrack[]) => {
     setEnhancingTracks(true);
     try {
       // Enhance more tracks initially to ensure we get enough with preview URLs
@@ -151,7 +154,9 @@ export const Gotify: React.FC = () => {
         (track) => !track.preview_url
       );
 
-      console.log(`🎵 Initial tracks: ${tracks.length}, without previews: ${tracksWithoutPreviews.length}`);
+      console.log(
+        `🎵 Initial tracks: ${tracks.length}, without previews: ${tracksWithoutPreviews.length}`
+      );
 
       if (tracksWithoutPreviews.length === 0) {
         console.log("Initial tracks already have preview URLs!");
@@ -182,7 +187,9 @@ export const Gotify: React.FC = () => {
         });
 
         const previewCount = updatedTracks.filter((t) => t.preview_url).length;
-        console.log(`🎉 Initial enhancement complete: ${previewCount}/${updatedTracks.length} tracks ready`);
+        console.log(
+          `🎉 Initial enhancement complete: ${previewCount}/${updatedTracks.length} tracks ready`
+        );
 
         return {
           ...prev,
@@ -259,7 +266,7 @@ export const Gotify: React.FC = () => {
         backgroundLoadingComplete: true,
       }));
     }
-  };  // Enhanced preview URL finding - for remaining tracks in background
+  }; // Enhanced preview URL finding - for remaining tracks in background
   const enhanceRemainingTracksInBackground = async (tracks: SpotifyTrack[]) => {
     // Skip first 8 tracks as they were already enhanced (or up to tracks.length if less than 8)
     const skipCount = Math.min(8, tracks.length);
@@ -370,7 +377,6 @@ export const Gotify: React.FC = () => {
       );
       return;
     }
-
     setGameState((prev) => ({
       ...prev,
       gameStarted: true,
@@ -383,6 +389,7 @@ export const Gotify: React.FC = () => {
       showReveal: false,
       guess: "",
       showHint: false,
+      lastScoreEarned: 0,
     }));
 
     generateRandomTrack();
@@ -520,13 +527,34 @@ export const Gotify: React.FC = () => {
       guess,
       `${trackName} ${artistName}`
     );
-
     let isCorrect = false;
     let scoreIncrease = 0;
     let guessResult: "correct" | "partial" | "wrong" = "wrong";
     const settings = difficultySettings[gameState.difficulty];
 
-    // Scoring logic based on similarity
+    // Calculate time-based multiplier (exponential decay based on remaining time)
+    const timeRatio = gameState.timeLeft / gameState.turnTimeLimit;
+
+    // Exponential decay function: starts at 10 points, decreases exponentially
+    // Formula: basePoints * e^(-decay * (1 - timeRatio))
+    const calculateTimeBasedPoints = (basePoints: number): number => {
+      const decay = 1.5; // Controls how steep the exponential decay is
+      const timeMultiplier = Math.exp(-decay * (1 - timeRatio));
+
+      // Map to the desired point ranges:
+      // Fastest (90-100% time left): ~10 points
+      // Fast (70-90% time left): ~7 points
+      // Normal (40-70% time left): ~5 points
+      // Slow (20-40% time left): ~4 points
+      // Very slow (0-20% time left): ~3 points
+      const minPoints = 3;
+      const maxPoints = 10;
+      const scaledPoints = minPoints + (maxPoints - minPoints) * timeMultiplier;
+
+      return Math.round((scaledPoints * basePoints) / 10); // Scale to base points
+    };
+
+    // Scoring logic based on similarity with time-based scoring
     if (
       combinedSimilarity >= 0.8 ||
       (trackSimilarity >= 0.8 && artistSimilarity >= 0.8)
@@ -534,8 +562,9 @@ export const Gotify: React.FC = () => {
       // Perfect or near-perfect match
       isCorrect = true;
       guessResult = "correct";
+      const basePoints = calculateTimeBasedPoints(10);
       scoreIncrease = Math.round(
-        10 * settings.scoreMultiplier * (1 + gameState.streak * 0.1)
+        basePoints * settings.scoreMultiplier * (1 + gameState.streak * 0.1)
       );
     } else if (
       trackSimilarity >= 0.6 ||
@@ -545,27 +574,23 @@ export const Gotify: React.FC = () => {
       // Partial match
       isCorrect = true;
       guessResult = "partial";
-      scoreIncrease = Math.round(5 * settings.scoreMultiplier);
+      const basePoints = Math.max(3, calculateTimeBasedPoints(7)); // Minimum 3 for partial
+      scoreIncrease = Math.round(basePoints * settings.scoreMultiplier);
     } else {
       // Wrong answer
       guessResult = "wrong";
       scoreIncrease = -2;
     }
 
-    // Time bonus for quick answers
-    if (isCorrect && gameState.timeLeft > gameState.turnTimeLimit * 0.7) {
-      scoreIncrease += Math.round(3 * settings.scoreMultiplier);
-    }
-
     // Update streak
     const newStreak = isCorrect ? gameState.streak + 1 : 0;
-
     setGameState((prev) => ({
       ...prev,
       score: Math.max(0, prev.score + scoreIncrease),
       showReveal: true,
       lastGuessResult: guessResult,
       streak: newStreak,
+      lastScoreEarned: scoreIncrease,
     }));
 
     // Visual feedback
@@ -596,7 +621,6 @@ export const Gotify: React.FC = () => {
       score: Math.max(0, prev.score - 1), // Small penalty for using hint
     }));
   };
-
   const handleReveal = () => {
     setGameState((prev) => ({
       ...prev,
@@ -604,6 +628,7 @@ export const Gotify: React.FC = () => {
       lastGuessResult: "wrong",
       score: Math.max(0, prev.score - 3), // Penalty for revealing
       streak: 0,
+      lastScoreEarned: -3,
     }));
     pauseTrack();
   };
@@ -613,18 +638,17 @@ export const Gotify: React.FC = () => {
       endGame();
       return;
     }
-
     setGameState((prev) => ({
       ...prev,
       turn: prev.turn + 1,
       showReveal: false,
       guess: "",
       showHint: false,
+      lastScoreEarned: 0,
     }));
 
     generateRandomTrack();
   };
-
   const handleTimeUp = () => {
     setGameState((prev) => ({
       ...prev,
@@ -632,6 +656,7 @@ export const Gotify: React.FC = () => {
       showReveal: true,
       lastGuessResult: "wrong",
       streak: 0,
+      lastScoreEarned: -2,
     }));
     pauseTrack();
   };
@@ -661,7 +686,6 @@ export const Gotify: React.FC = () => {
       }
     }
   };
-
   const restartGame = () => {
     if (audioRef.current) {
       audioRef.current.pause();
@@ -684,6 +708,7 @@ export const Gotify: React.FC = () => {
       streak: 0,
       showHint: false,
       hints: difficultySettings[prev.difficulty].hints,
+      lastScoreEarned: 0,
     }));
   };
 
@@ -1067,10 +1092,59 @@ export const Gotify: React.FC = () => {
                             : gameState.lastGuessResult === "partial"
                             ? "⚡ Close!"
                             : "❌ Wrong"}
-                        </div>
+                        </div>{" "}
                         {gameState.guess && (
                           <div className="text-sm text-gray-300 mt-1">
                             Your guess: "{gameState.guess}"
+                          </div>
+                        )}{" "}
+                        {/* Speed Scoring Display */}
+                        {(gameState.lastGuessResult === "correct" ||
+                          gameState.lastGuessResult === "partial") && (
+                          <div className="mt-2 space-y-1">
+                            <div className="flex items-center justify-between bg-gray-700/50 rounded px-2 py-1">
+                              <span className="text-gray-300">Speed:</span>
+                              <span className="text-cyan-400 font-bold">
+                                {(() => {
+                                  const timeRatio =
+                                    gameState.timeLeft /
+                                    gameState.turnTimeLimit;
+                                  if (timeRatio >= 0.9)
+                                    return "⚡ Lightning Fast!";
+                                  if (timeRatio >= 0.7) return "🚀 Fast!";
+                                  if (timeRatio >= 0.4) return "⏱️ Normal";
+                                  if (timeRatio >= 0.2) return "🐌 Slow";
+                                  return "🐢 Very Slow";
+                                })()}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between bg-gray-700/50 rounded px-2 py-1">
+                              <span className="text-gray-300">
+                                Points Earned:
+                              </span>
+                              <span
+                                className={`font-bold ${
+                                  gameState.lastScoreEarned > 0
+                                    ? "text-green-400"
+                                    : "text-red-400"
+                                }`}
+                              >
+                                {gameState.lastScoreEarned > 0 ? "+" : ""}
+                                {gameState.lastScoreEarned}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                        {gameState.lastGuessResult === "wrong" && (
+                          <div className="mt-2">
+                            <div className="flex items-center justify-between bg-gray-700/50 rounded px-2 py-1">
+                              <span className="text-gray-300">
+                                Points Lost:
+                              </span>
+                              <span className="text-red-400 font-bold">
+                                {gameState.lastScoreEarned}
+                              </span>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -1157,21 +1231,21 @@ export const Gotify: React.FC = () => {
             <div className="flex flex-wrap gap-4 justify-center">
               <button
                 onClick={restartGame}
-                className="bg-spotify-green text-black font-bold py-3 px-6 rounded-full hover:scale-105 transition-transform flex items-center gap-2"
+                className="bg-spotify-green cursor-pointer text-black font-bold py-3 px-6 rounded-full hover:scale-105 transition-transform flex items-center gap-2"
               >
                 <RotateCcw size={20} />
                 Play Again
               </button>
               <button
                 onClick={showLeaderboardData}
-                className="bg-blue-600 text-white font-bold py-3 px-6 rounded-full hover:scale-105 transition-transform flex items-center gap-2"
+                className="bg-blue-600 cursor-pointer text-white font-bold py-3 px-6 rounded-full hover:scale-105 transition-transform flex items-center gap-2"
               >
                 <Award size={20} />
                 Leaderboard
               </button>
               <button
                 onClick={() => (window.location.href = "/dashboard")}
-                className="bg-gray-600 text-white font-bold py-3 px-6 rounded-full hover:scale-105 transition-transform flex items-center gap-2"
+                className="bg-gray-600 cursor-pointer text-white font-bold py-3 px-6 rounded-full hover:scale-105 transition-transform flex items-center gap-2"
               >
                 <Home size={20} />
                 Home
