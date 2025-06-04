@@ -319,7 +319,9 @@ export const spotifyAuth = {
   // Generate auth URL for implicit grant flow
   getAuthUrl: (): string => {
     const clientId = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
-    const redirectUri = import.meta.env.VITE_SPOTIFY_REDIRECT_URI;
+    const redirectUri =
+      import.meta.env.VITE_SPOTIFY_REDIRECT_URI ||
+      "https://hubify-c2421.web.app/auth/callback";
     const scopes = import.meta.env.VITE_SPOTIFY_SCOPES;
 
     if (!clientId || !redirectUri || !scopes) {
@@ -380,9 +382,22 @@ export const spotifyAuth = {
   },
 };
 
+// Cloud Function URLs for preview URL fetching
+const CLOUD_FUNCTION_URLS = {
+  getPreviewUrl:
+    import.meta.env.VITE_GET_PREVIEW_URL ||
+    "https://getpreviewurl-ntxx22kojq-uc.a.run.app",
+  getBatchPreviewUrls:
+    import.meta.env.VITE_GET_BATCH_PREVIEW_URLS ||
+    "https://getbatchpreviewurls-ntxx22kojq-uc.a.run.app",
+  keepWarm:
+    import.meta.env.VITE_KEEP_WARM_URL ||
+    "https://keepwarm-ntxx22kojq-uc.a.run.app",
+};
+
 // Add preview URL finding utilities
 export const previewUrlApi = {
-  // Use Deezer API for preview URLs (no authentication required!)
+  // Use Cloud Function to fetch preview URLs (handles CORS)
   findPreviewUrlDeezer: async (
     artist: string,
     title: string
@@ -392,60 +407,87 @@ export const previewUrlApi = {
       const cleanArtist = artist.trim();
       const cleanTitle = title.trim();
 
-      // Try different query formats for better results with Chinese text
-      const queries = [
-        `${cleanArtist} ${cleanTitle}`, // Simple search
-        cleanTitle, // Title only search
-        cleanArtist, // Artist only search
-      ];
+      console.log(`Trying to find preview URL for: ${title} by ${artist}`);
 
-      for (const query of queries) {
-        try {
-          console.log(`Trying Deezer search with query: ${query}`);
+      // Use Cloud Function for preview URL fetching (GET request with query params)
+      const response = await axios.get(CLOUD_FUNCTION_URLS.getPreviewUrl, {
+        params: {
+          artist: cleanArtist,
+          title: cleanTitle,
+        },
+        headers: {
+          Accept: "application/json",
+        },
+        timeout: 10000, // 10 second timeout
+      });
 
-          // Use the CORS proxy for the request
-          const response = await axios.get(
-            `https://cors-anywhere.herokuapp.com/https://api.deezer.com/search`,
-            {
-              params: {
-                q: query,
-              },
-              headers: {
-                Accept: "application/json",
-                "Content-Type": "application/json; charset=utf-8",
-              },
-            }
-          );
+      console.log(`Cloud Function response for "${title}":`, response.data);
 
-          console.log(`Deezer API response for "${query}":`, response.data);
-
-          if (response.data.data && response.data.data.length > 0) {
-            // Find first track with a preview URL and that's readable
-            const trackWithPreview = response.data.data.find(
-              (track: any) => track.preview && track.readable
-            );
-
-            if (trackWithPreview) {
-              console.log(`✅ Found Deezer preview for: ${title} by ${artist}`);
-              console.log(`Preview URL: ${trackWithPreview.preview}`);
-              return trackWithPreview.preview;
-            }
-          }
-        } catch (queryError) {
-          console.warn(`Query "${query}" failed:`, queryError);
-          continue; // Try next query
-        }
+      if (response.data.preview_url) {
+        console.log(`✅ Found preview URL for: ${title} by ${artist}`);
+        console.log(`Preview URL: ${response.data.preview_url}`);
+        return response.data.preview_url;
       }
 
-      console.log(`❌ No preview found on Deezer for: ${title} by ${artist}`);
+      console.log(`❌ No preview found for: ${title} by ${artist}`);
       return null;
     } catch (error) {
-      console.error("Error with Deezer preview finder:", error);
+      console.error("Error with Cloud Function preview finder:", error);
       return null;
     }
   },
+  // Batch process multiple tracks using the batch Cloud Function
+  getBatchPreviewUrls: async (
+    tracks: { artist: string; title: string }[]
+  ): Promise<
+    Array<{ success: boolean; previewUrl?: string; error?: string }>
+  > => {
+    try {
+      console.log(`Getting batch preview URLs for ${tracks.length} tracks`);
 
-  // Batch process tracks to find missing preview URLs with rate limiting
+      const response = await axios.post(
+        CLOUD_FUNCTION_URLS.getBatchPreviewUrls,
+        {
+          tracks,
+        },
+        {
+          headers: {
+            "Content-Type": "application/json",
+          },
+          timeout: 30000, // 30 second timeout for batch operations
+        }
+      );
+
+      // Convert Cloud Function response format to expected format
+      const results = response.data.results || [];
+      return results.map((result: any) => ({
+        success: !!result.preview_url,
+        previewUrl: result.preview_url || undefined,
+        error:
+          result.error || (result.preview_url ? undefined : "No preview found"),
+      }));
+    } catch (error) {
+      console.error("Error with batch preview URL fetching:", error);
+      // Return error array for all tracks
+      return tracks.map(() => ({
+        success: false,
+        error: "Batch request failed",
+      }));
+    }
+  },
+
+  // Keep warm function to prevent cold starts
+  keepWarm: async (): Promise<void> => {
+    try {
+      await axios.get(CLOUD_FUNCTION_URLS.keepWarm, {
+        timeout: 5000,
+      });
+      console.log("Cloud Functions warmed up");
+    } catch (error) {
+      console.warn("Failed to warm up Cloud Functions:", error);
+    }
+  },
+  // Batch process tracks to find missing preview URLs using Cloud Functions
   enhanceTracksWithPreviewUrls: async (
     tracks: SpotifyTrack[],
     onProgress?: (processed: number, total: number) => void
@@ -460,39 +502,68 @@ export const previewUrlApi = {
     }
 
     console.log(
-      `Finding preview URLs for ${tracksNeedingPreview.length} tracks using Deezer...`
+      `Finding preview URLs for ${tracksNeedingPreview.length} tracks using Cloud Functions...`
     );
 
-    // Process in smaller batches for Deezer API
-    const BATCH_SIZE = 3;
-    const DELAY_BETWEEN_BATCHES = 800; // Slightly less delay since Deezer is more permissive
+    // Warm up the Cloud Functions first to reduce cold start delays
+    await previewUrlApi.keepWarm();
+
+    // Use batch processing for better efficiency
+    const BATCH_SIZE = 10; // Larger batch size since we're using Cloud Functions
 
     for (let i = 0; i < tracksNeedingPreview.length; i += BATCH_SIZE) {
       const batch = tracksNeedingPreview.slice(i, i + BATCH_SIZE);
 
-      // Process batch in parallel
-      const promises = batch.map(async ({ track, index }) => {
-        try {
-          const previewUrl = await previewUrlApi.findPreviewUrlDeezer(
-            track.artists[0].name,
-            track.name
-          );
+      // Prepare batch data
+      const batchTracks = batch.map(({ track }) => ({
+        artist: track.artists[0].name,
+        title: track.name,
+      }));
 
-          if (previewUrl) {
+      try {
+        // Get batch preview URLs from Cloud Function
+        const results = await previewUrlApi.getBatchPreviewUrls(batchTracks);
+
+        // Apply results to tracks
+        batch.forEach(({ track, index }, batchIndex) => {
+          const result = results[batchIndex];
+          if (result && result.success && result.previewUrl) {
             enhancedTracks[index] = {
               ...track,
-              preview_url: previewUrl,
+              preview_url: result.previewUrl,
             };
             console.log(
               `Found preview URL for: ${track.name} by ${track.artists[0].name}`
             );
           }
-        } catch (error) {
-          console.error(`Failed to find preview for ${track.name}:`, error);
-        }
-      });
+        });
+      } catch (error) {
+        console.error(`Failed to process batch starting at index ${i}:`, error);
 
-      await Promise.all(promises);
+        // Fallback to individual requests for this batch
+        const promises = batch.map(async ({ track, index }) => {
+          try {
+            const previewUrl = await previewUrlApi.findPreviewUrlDeezer(
+              track.artists[0].name,
+              track.name
+            );
+
+            if (previewUrl) {
+              enhancedTracks[index] = {
+                ...track,
+                preview_url: previewUrl,
+              };
+              console.log(
+                `Found preview URL for: ${track.name} by ${track.artists[0].name}`
+              );
+            }
+          } catch (error) {
+            console.error(`Failed to find preview for ${track.name}:`, error);
+          }
+        });
+
+        await Promise.all(promises);
+      }
 
       // Update progress
       if (onProgress) {
@@ -502,11 +573,9 @@ export const previewUrlApi = {
         );
       }
 
-      // Delay between batches to respect rate limits
+      // Small delay between batches to be respectful
       if (i + BATCH_SIZE < tracksNeedingPreview.length) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, DELAY_BETWEEN_BATCHES)
-        );
+        await new Promise((resolve) => setTimeout(resolve, 200));
       }
     }
 

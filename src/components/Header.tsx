@@ -8,7 +8,6 @@ import {
   TrendingUp,
   Gamepad2,
   Trophy,
-  Heart,
   User,
   ChevronDown,
 } from "lucide-react";
