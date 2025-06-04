@@ -241,7 +241,7 @@ export const Spotimatch: React.FC = () => {
   };
 
   const calculateEnhancedSimilarityScore = (
-    seedTrack: SpotifyTrack,
+    _seedTrack: SpotifyTrack,
     recTrack: SpotifyTrack,
     reasons: string[],
     seedAudioFeatures?: any,

@@ -7,8 +7,6 @@ import {
   Award,
   Volume2,
   VolumeX,
-  Clock,
-  Target,
 } from "lucide-react";
 import type { SpotifyTrack } from "../types";
 import { spotifyApi, backendApi, previewUrlApi } from "../services/api";
@@ -35,6 +33,10 @@ interface GameState {
   hints: number;
   showHint: boolean;
   volume: number;
+  // New states for progressive loading
+  initialTracksLoaded: boolean;
+  backgroundLoadingComplete: boolean;
+  totalAvailableTracks: number;
 }
 
 interface LeaderboardEntry {
@@ -42,8 +44,8 @@ interface LeaderboardEntry {
   player_name: string;
   score: number;
   created_at: string;
-  difficulty: string;
-  streak: number;
+  difficulty?: string;
+  streak?: number;
 }
 
 export const Gotify: React.FC = () => {
@@ -72,6 +74,10 @@ export const Gotify: React.FC = () => {
     hints: 3,
     showHint: false,
     volume: 0.7,
+    // New initial values
+    initialTracksLoaded: false,
+    backgroundLoadingComplete: false,
+    totalAvailableTracks: 0,
   });
 
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
@@ -87,66 +93,54 @@ export const Gotify: React.FC = () => {
     easy: { maxTurns: 5, timeLimit: 30, scoreMultiplier: 1, hints: 5 },
     medium: { maxTurns: 10, timeLimit: 20, scoreMultiplier: 1.5, hints: 3 },
     hard: { maxTurns: 15, timeLimit: 15, scoreMultiplier: 2, hints: 1 },
-  };
-
-  // Load user's top tracks for the game
+  }; // Progressive loading - load tracks in stages
   useEffect(() => {
-    const loadTracks = async () => {
+    const loadInitialTracks = async () => {
       try {
         setLoading(true);
 
-        // Get a mix of short, medium, and long term tracks for variety
-        const [shortTerm, mediumTerm, longTerm] = await Promise.all([
-          spotifyApi
-            .getTopTracks("short_term", 20)
-            .catch(() => ({ items: [] })),
-          spotifyApi
-            .getTopTracks("medium_term", 20)
-            .catch(() => ({ items: [] })),
-          spotifyApi.getTopTracks("long_term", 20).catch(() => ({ items: [] })),
-        ]);
+        // First: Load just the medium term tracks to start quickly
+        const mediumTerm = await spotifyApi
+          .getTopTracks("medium_term", 20)
+          .catch(() => ({ items: [] }));
 
-        // Combine and deduplicate tracks
-        const allTracks = [
-          ...shortTerm.items,
-          ...mediumTerm.items,
-          ...longTerm.items,
-        ];
+        if (mediumTerm.items.length > 0) {
+          setGameState((prev) => ({
+            ...prev,
+            tracks: mediumTerm.items,
+            totalAvailableTracks: mediumTerm.items.length,
+          }));
 
-        const uniqueTracks = allTracks.filter(
-          (track, index, self) =>
-            index === self.findIndex((t) => t.id === track.id)
-        );
-
-        setGameState((prev) => ({
-          ...prev,
-          tracks: uniqueTracks.slice(0, 50), // Limit to 50 tracks for performance
-        }));
-
-        // Auto-enhance tracks with preview URLs
-        if (uniqueTracks.length > 0) {
-          enhanceTracksWithPreviews(uniqueTracks.slice(0, 50));
+          // Enhance the initial tracks quickly with just a few
+          enhanceInitialTracksQuickly(mediumTerm.items);
         }
+
+        setLoading(false);
+
+        // Background loading: Get more tracks from other time ranges
+        loadAdditionalTracksInBackground();
       } catch (error) {
-        console.error("Error loading tracks:", error);
-      } finally {
+        console.error("Error loading initial tracks:", error);
         setLoading(false);
       }
     };
 
-    loadTracks();
+    loadInitialTracks();
   }, []);
 
-  // Enhanced preview URL finding
-  const enhanceTracksWithPreviews = async (tracks: SpotifyTrack[]) => {
+  // Quick enhancement for initial tracks - only process first 5 to get started fast
+  const enhanceInitialTracksQuickly = async (tracks: SpotifyTrack[]) => {
     setEnhancingTracks(true);
     try {
-      const tracksWithoutPreviews = tracks.filter(
+      const tracksToEnhance = tracks.slice(0, 10); // Only enhance first 10 tracks initially
+      const tracksWithoutPreviews = tracksToEnhance.filter(
         (track) => !track.preview_url
       );
 
       if (tracksWithoutPreviews.length === 0) {
-        console.log("All tracks already have preview URLs!");
+        console.log("Initial tracks already have preview URLs!");
+        setGameState((prev) => ({ ...prev, initialTracksLoaded: true }));
+        setEnhancingTracks(false);
         return;
       }
 
@@ -156,25 +150,132 @@ export const Gotify: React.FC = () => {
       });
 
       const enhancedTracks = await previewUrlApi.enhanceTracksWithPreviewUrls(
-        tracks,
+        tracksToEnhance,
         (processed, total) => {
           setEnhancementProgress({ processed, total });
         }
       );
 
-      setGameState((prev) => ({ ...prev, tracks: enhancedTracks }));
+      setGameState((prev) => {
+        const updatedTracks = [...prev.tracks];
+        // Update only the enhanced tracks
+        enhancedTracks.forEach((enhancedTrack, index) => {
+          if (index < updatedTracks.length) {
+            updatedTracks[index] = enhancedTrack;
+          }
+        });
 
-      const finalPreviewCount = enhancedTracks.filter(
-        (t) => t.preview_url
-      ).length;
+        return {
+          ...prev,
+          tracks: updatedTracks,
+          initialTracksLoaded: true,
+        };
+      });
+
+      const previewCount = enhancedTracks.filter((t) => t.preview_url).length;
       console.log(
-        `🎉 Enhanced tracks: ${finalPreviewCount}/${enhancedTracks.length} now have previews`
+        `🎉 Initial enhancement complete: ${previewCount}/${enhancedTracks.length} tracks ready`
       );
     } catch (error) {
-      console.error("Error enhancing tracks:", error);
+      console.error("Error enhancing initial tracks:", error);
     } finally {
       setEnhancingTracks(false);
       setEnhancementProgress({ processed: 0, total: 0 });
+    }
+  };
+
+  const loadAdditionalTracksInBackground = async () => {
+    try {
+      console.log("🔄 Loading additional tracks in background...");
+
+      // Get short and long term tracks
+      const [shortTerm, longTerm] = await Promise.all([
+        spotifyApi.getTopTracks("short_term", 20).catch(() => ({ items: [] })),
+        spotifyApi.getTopTracks("long_term", 20).catch(() => ({ items: [] })),
+      ]);
+
+      // Combine with existing tracks and deduplicate
+      setGameState((prev) => {
+        const allTracks = [
+          ...prev.tracks,
+          ...shortTerm.items,
+          ...longTerm.items,
+        ];
+        const uniqueTracks = allTracks.filter(
+          (track, index, self) =>
+            index === self.findIndex((t) => t.id === track.id)
+        );
+
+        const finalTracks = uniqueTracks.slice(0, 50); // Limit to 50 tracks for performance
+
+        console.log(
+          `📚 Background loading complete: ${finalTracks.length} total tracks`
+        );
+
+        return {
+          ...prev,
+          tracks: finalTracks,
+          totalAvailableTracks: finalTracks.length,
+          backgroundLoadingComplete: true,
+        };
+      });
+
+      // Enhance the new tracks in background
+      setTimeout(() => {
+        setGameState((current) => {
+          enhanceRemainingTracksInBackground(current.tracks);
+          return current;
+        });
+      }, 500);
+    } catch (error) {
+      console.error("Error loading additional tracks:", error);
+      setGameState((prev) => ({
+        ...prev,
+        backgroundLoadingComplete: true,
+      }));
+    }
+  }; // Enhanced preview URL finding - for remaining tracks in background
+  const enhanceRemainingTracksInBackground = async (tracks: SpotifyTrack[]) => {
+    // Skip first 10 tracks as they were already enhanced
+    const remainingTracks = tracks.slice(10);
+    const tracksWithoutPreviews = remainingTracks.filter(
+      (track) => !track.preview_url
+    );
+
+    if (tracksWithoutPreviews.length === 0) {
+      console.log("All remaining tracks already have preview URLs!");
+      return;
+    }
+
+    console.log(
+      `🔍 Enhancing ${tracksWithoutPreviews.length} remaining tracks in background...`
+    );
+
+    try {
+      const enhancedTracks = await previewUrlApi.enhanceTracksWithPreviewUrls(
+        remainingTracks,
+        () => {} // No progress updates for background enhancement
+      );
+
+      setGameState((prev) => {
+        const updatedTracks = [...prev.tracks];
+        // Update the remaining tracks
+        enhancedTracks.forEach((enhancedTrack, index) => {
+          const actualIndex = index + 10; // Offset by 10 since we skipped first 10
+          if (actualIndex < updatedTracks.length) {
+            updatedTracks[actualIndex] = enhancedTrack;
+          }
+        });
+
+        return { ...prev, tracks: updatedTracks };
+      });
+
+      const finalPreviewCount = tracks.filter((t) => t.preview_url).length;
+      console.log(
+        `🎉 Background enhancement complete: ${finalPreviewCount}/${tracks.length} total tracks with previews`
+      );
+    } catch (error) {
+      console.error("Error enhancing remaining tracks:", error);
     }
   };
 
@@ -226,15 +327,21 @@ export const Gotify: React.FC = () => {
       hints: settings.hints,
     }));
   };
-
   const startGame = () => {
     const tracksWithPreviews = gameState.tracks.filter(
       (track) => track.preview_url
     );
 
-    if (tracksWithPreviews.length < 5) {
+    // Progressive loading: Allow starting with just 3 tracks
+    if (tracksWithPreviews.length < 3) {
       alert(
-        "Not enough tracks with preview URLs. Please wait for enhancement to complete or try again later."
+        `Need at least 3 tracks with preview URLs to start. Currently have ${
+          tracksWithPreviews.length
+        }. ${
+          !gameState.initialTracksLoaded
+            ? "Please wait for initial tracks to load."
+            : "Try refreshing the page."
+        }`
       );
       return;
     }
@@ -255,7 +362,6 @@ export const Gotify: React.FC = () => {
 
     generateRandomTrack();
   };
-
   const generateRandomTrack = () => {
     const availableTracks = gameState.tracks.filter(
       (track) => !gameState.playedTracks.includes(track) && track.preview_url
@@ -286,6 +392,28 @@ export const Gotify: React.FC = () => {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
     }
+
+    // Auto-play the new track after a short delay
+    setTimeout(() => {
+      if (randomTrack?.preview_url) {
+        audioRef.current = new Audio(randomTrack.preview_url);
+        audioRef.current.volume = gameState.volume;
+        audioRef.current.play().catch((error) => {
+          console.error("Failed to auto-play audio:", error);
+        });
+
+        setGameState((prev) => ({ ...prev, isPlaying: true }));
+
+        audioRef.current.onended = () => {
+          setGameState((prev) => ({ ...prev, isPlaying: false }));
+        };
+
+        audioRef.current.onerror = () => {
+          setGameState((prev) => ({ ...prev, isPlaying: false }));
+          console.error("Audio failed to load");
+        };
+      }
+    }, 500); // Small delay to ensure state is updated
   };
 
   const playTrack = () => {
@@ -593,9 +721,8 @@ export const Gotify: React.FC = () => {
               <br />
               Score points for correct guesses and build up streaks for bonus
               points!
-            </p>
-
-            {/* Track Statistics */}
+            </p>{" "}
+            {/* Track Statistics with Progressive Loading Status */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
               <div className="bg-gray-700 p-4 rounded-lg">
                 <div className="text-2xl font-bold text-spotify-green">
@@ -603,6 +730,11 @@ export const Gotify: React.FC = () => {
                 </div>
                 <div className="text-sm text-spotify-lightgray">
                   Total Tracks
+                  {!gameState.backgroundLoadingComplete && (
+                    <span className="block text-blue-400 text-xs">
+                      Loading more...
+                    </span>
+                  )}
                 </div>
               </div>
               <div className="bg-gray-700 p-4 rounded-lg">
@@ -611,6 +743,11 @@ export const Gotify: React.FC = () => {
                 </div>
                 <div className="text-sm text-spotify-lightgray">
                   With Previews
+                  {enhancingTracks && (
+                    <span className="block text-blue-400 text-xs">
+                      Finding...
+                    </span>
+                  )}
                 </div>
               </div>
               <div className="bg-gray-700 p-4 rounded-lg">
@@ -626,7 +763,21 @@ export const Gotify: React.FC = () => {
                 <div className="text-sm text-spotify-lightgray">Time Limit</div>
               </div>
             </div>
-
+            {/* Quick Start Status */}
+            {gameState.tracks.filter((t) => t.preview_url).length >= 3 && (
+              <div className="bg-green-600/20 border border-green-600 rounded-lg p-4 mb-6">
+                <p className="text-green-400 font-bold mb-1">
+                  🎮 Ready to Play!
+                </p>
+                <p className="text-green-200 text-sm">
+                  You have{" "}
+                  {gameState.tracks.filter((t) => t.preview_url).length} tracks
+                  ready.
+                  {!gameState.backgroundLoadingComplete &&
+                    " More tracks are loading in the background to expand your game!"}
+                </p>
+              </div>
+            )}
             {/* Difficulty Selection */}
             <div className="mb-8">
               <h3 className="text-lg font-bold mb-4">Choose Difficulty</h3>
@@ -654,7 +805,6 @@ export const Gotify: React.FC = () => {
                 ))}
               </div>
             </div>
-
             {/* Volume Control */}
             <div className="mb-8">
               <div className="flex items-center gap-4 justify-center">
@@ -678,27 +828,26 @@ export const Gotify: React.FC = () => {
                   {Math.round(gameState.volume * 100)}%
                 </span>
               </div>
-            </div>
-
+            </div>{" "}
             <button
               onClick={startGame}
               disabled={
-                gameState.tracks.filter((t) => t.preview_url).length < 5
+                gameState.tracks.filter((t) => t.preview_url).length < 3
               }
-              className="bg-spotify-green text-black font-bold py-3 px-8 rounded-full hover:scale-105 transition-transform disabled:opacity-50 disabled:cursor-not-allowed"
+              className="bg-spotify-green cursor-pointer text-black font-bold py-3 px-8 rounded-full hover:scale-105 transition-transform disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Start Game
             </button>
-
-            {gameState.tracks.filter((t) => t.preview_url).length < 5 && (
+            {gameState.tracks.filter((t) => t.preview_url).length < 3 && (
               <p className="text-red-400 mt-4">
-                Not enough tracks with preview URLs.
+                Need at least 3 tracks with preview URLs to start.
                 {enhancingTracks
-                  ? " Please wait for enhancement to complete."
+                  ? " Finding more preview URLs..."
+                  : !gameState.initialTracksLoaded
+                  ? " Loading initial tracks..."
                   : " Try refreshing the page."}
               </p>
             )}
-
             {enhancingTracks && (
               <div className="mt-4">
                 <p className="text-spotify-lightgray text-sm mb-2">
@@ -924,7 +1073,10 @@ export const Gotify: React.FC = () => {
 
                     <button
                       onClick={nextTurn}
+                      onKeyPress={(e) => e.key === "Enter" && nextTurn()}
                       className="bg-spotify-green text-black font-bold py-3 px-8 rounded-full hover:scale-105 transition-transform"
+                      tabIndex={0}
+                      autoFocus
                     >
                       {gameState.turn >= gameState.maxTurns
                         ? "Finish Game"

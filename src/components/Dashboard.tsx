@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAuth } from "../contexts/AuthContext";
 import { spotifyApi } from "../services/api";
 import type { SpotifyTrack, SpotifyArtist } from "../types";
 import {

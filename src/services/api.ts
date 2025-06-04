@@ -3,9 +3,7 @@ import type {
   SpotifyUser,
   TopTracksResponse,
   RecentlyPlayedResponse,
-  LeaderboardResponse,
   LeaderboardEntry,
-  GameScore,
   SpotifyArtist,
   SpotifyTrack,
 } from "../types";
@@ -372,7 +370,7 @@ export const backendApi = {
     }
   },
   // Check if user is registered (mock - always return true for now)
-  checkUserRegistration: async (email: string): Promise<boolean> => {
+  checkUserRegistration: async (_email: string): Promise<boolean> => {
     try {
       // Mock implementation - you can add real backend logic later
       return true;
@@ -439,7 +437,7 @@ export const spotifyAuth = {
 
   // Mock implementation for now - remove the error
   exchangeCodeForToken: async (
-    code: string
+    _code: string
   ): Promise<{ access_token: string; refresh_token?: string }> => {
     // For now, let's check if we can get the token from the URL hash instead
     const tokenData = spotifyAuth.getTokenFromUrl();
@@ -468,7 +466,6 @@ export const previewUrlApi = {
 
       // Try different query formats for better results with Chinese text
       const queries = [
-        `artist:"${cleanArtist}" track:"${cleanTitle}"`, // Exact search with quotes
         `${cleanArtist} ${cleanTitle}`, // Simple search
         cleanTitle, // Title only search
         cleanArtist, // Artist only search
