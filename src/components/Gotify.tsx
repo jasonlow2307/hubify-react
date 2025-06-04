@@ -1243,7 +1243,7 @@ export const Gotify: React.FC = () => {
                 onClick={() =>
                   setGameState((prev) => ({ ...prev, showLeaderboard: false }))
                 }
-                className="bg-gray-600 text-white font-bold py-2 px-6 rounded-full hover:scale-105 transition-transform"
+                className="bg-gray-600 cursor-pointer text-white font-bold py-2 px-6 rounded-full hover:scale-105 transition-transform"
               >
                 Back
               </button>

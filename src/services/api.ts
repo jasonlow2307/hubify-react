@@ -232,7 +232,9 @@ export const spotifyApi = {
   },
 };
 
-// Mock backend API for development (replace with real backend later)
+import { firestoreApi } from "./firestore";
+
+// Backend API using Firestore
 export const backendApi = {
   saveScore: async (
     playerName: string,
@@ -245,87 +247,45 @@ export const backendApi = {
       accuracy?: number;
     }
   ): Promise<{ success: boolean; message: string }> => {
-    try {
-      // For development: use localStorage
-      const scores = JSON.parse(localStorage.getItem("game_scores") || "[]");
-      const newScore = {
-        id: Date.now(),
-        player_name: playerName,
-        score,
-        game_type: gameType,
-        difficulty: metadata?.difficulty || "medium",
-        streak: metadata?.streak || 0,
-        turns_completed: metadata?.turns_completed || 0,
-        accuracy: metadata?.accuracy || 0,
-        created_at: new Date().toISOString(),
-      };
-
-      scores.push(newScore);
-
-      // Keep only top 100 scores to prevent localStorage bloat
-      scores.sort((a: any, b: any) => b.score - a.score);
-      const topScores = scores.slice(0, 100);
-      localStorage.setItem("game_scores", JSON.stringify(topScores));
-
-      console.log("Score saved:", newScore);
-      return { success: true, message: "Score saved successfully!" };
-    } catch (error) {
-      console.error("Error saving score:", error);
-      return { success: false, message: "Failed to save score" };
-    }
+    return await firestoreApi.saveScore(playerName, score, gameType, metadata);
   },
 
-  // Enhanced leaderboard with filtering and sorting
+  // Enhanced leaderboard with filtering and sorting using Firestore
   getLeaderboard: async (
     gameType?: "gotify" | "spotimatch",
     difficulty?: string,
-    limit: number = 10
+    limit: number = 50
   ): Promise<{
     leaderboard: LeaderboardEntry[];
     Items: LeaderboardEntry[];
     Count: number;
   }> => {
-    try {
-      const scores = JSON.parse(localStorage.getItem("game_scores") || "[]");
-      let filteredScores = scores;
+    const result = await firestoreApi.getLeaderboard(
+      gameType,
+      difficulty,
+      limit
+    );
 
-      // Filter by game type
-      if (gameType) {
-        filteredScores = filteredScores.filter(
-          (score: any) => score.game_type === gameType
-        );
-      }
+    // Convert FirestoreLeaderboardEntry to LeaderboardEntry
+    const convertedLeaderboard = result.leaderboard.map((entry) => ({
+      id: entry.id || entry.player_name + "_" + Date.now(),
+      player_name: entry.player_name,
+      score: entry.score,
+      created_at:
+        typeof entry.created_at === "string"
+          ? entry.created_at
+          : new Date().toISOString(),
+      difficulty: entry.difficulty,
+      streak: entry.streak,
+    }));
 
-      // Filter by difficulty
-      if (difficulty) {
-        filteredScores = filteredScores.filter(
-          (score: any) => score.difficulty === difficulty
-        );
-      }
-
-      // Sort by score descending, then by streak, then by date
-      const sortedScores = filteredScores
-        .sort((a: any, b: any) => {
-          if (b.score !== a.score) return b.score - a.score;
-          if (b.streak !== a.streak) return b.streak - a.streak;
-          return (
-            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-          );
-        })
-        .slice(0, limit);
-
-      return {
-        leaderboard: sortedScores,
-        Items: sortedScores,
-        Count: sortedScores.length,
-      };
-    } catch (error) {
-      console.error("Error fetching leaderboard:", error);
-      return { leaderboard: [], Items: [], Count: 0 };
-    }
+    return {
+      leaderboard: convertedLeaderboard,
+      Items: convertedLeaderboard,
+      Count: convertedLeaderboard.length,
+    };
   },
-
-  // Get user's personal best scores
+  // Get user's personal best scores using Firestore
   getUserStats: async (
     playerName: string,
     gameType?: "gotify" | "spotimatch"
@@ -335,39 +295,7 @@ export const backendApi = {
     totalGames: number;
     averageScore: number;
   }> => {
-    try {
-      const scores = JSON.parse(localStorage.getItem("game_scores") || "[]");
-      let userScores = scores.filter(
-        (score: any) => score.player_name === playerName
-      );
-
-      if (gameType) {
-        userScores = userScores.filter(
-          (score: any) => score.game_type === gameType
-        );
-      }
-
-      if (userScores.length === 0) {
-        return { bestScore: 0, bestStreak: 0, totalGames: 0, averageScore: 0 };
-      }
-
-      const bestScore = Math.max(...userScores.map((s: any) => s.score));
-      const bestStreak = Math.max(...userScores.map((s: any) => s.streak || 0));
-      const totalGames = userScores.length;
-      const averageScore =
-        userScores.reduce((sum: number, s: any) => sum + s.score, 0) /
-        totalGames;
-
-      return {
-        bestScore,
-        bestStreak,
-        totalGames,
-        averageScore: Math.round(averageScore),
-      };
-    } catch (error) {
-      console.error("Error fetching user stats:", error);
-      return { bestScore: 0, bestStreak: 0, totalGames: 0, averageScore: 0 };
-    }
+    return await firestoreApi.getUserStats(playerName, gameType);
   },
   // Check if user is registered (mock - always return true for now)
   checkUserRegistration: async (_email: string): Promise<boolean> => {

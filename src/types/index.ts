@@ -61,6 +61,10 @@ export interface LeaderboardEntry {
   player_name: string;
   score: number;
   created_at: string;
+  difficulty?: string;
+  streak?: number;
+  turns_completed?: number;
+  accuracy?: number;
 }
 
 export interface LeaderboardResponse {

@@ -1,11 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Trophy, Medal, Award, RefreshCw, Calendar } from "lucide-react";
-
-interface LeaderboardEntry {
-  id: string;
-  score: number;
-  created_at: string;
-}
+import { backendApi } from "../services/api";
+import type { LeaderboardEntry } from "../types";
 
 export const Leaderboard: React.FC = () => {
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
@@ -15,19 +11,13 @@ export const Leaderboard: React.FC = () => {
   useEffect(() => {
     fetchLeaderboard();
   }, []);
-
   const fetchLeaderboard = async () => {
     try {
       setLoading(true);
       setError(null);
 
-      const response = await fetch("/api/leaderboard");
-      if (!response.ok) {
-        throw new Error("Failed to fetch leaderboard");
-      }
-
-      const data = await response.json();
-      setLeaderboard(data.Items || []);
+      const response = await backendApi.getLeaderboard("gotify");
+      setLeaderboard(response.leaderboard || []);
     } catch (error) {
       console.error("Error fetching leaderboard:", error);
       setError("Failed to load leaderboard. Please try again.");
@@ -126,17 +116,6 @@ export const Leaderboard: React.FC = () => {
   return (
     <div className="min-h-screen bg-spotify-black text-white p-4">
       <div className="max-w-4xl mx-auto">
-        {/* Header */}
-        <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold mb-4 text-spotify-green flex items-center justify-center gap-3">
-            <Trophy size={40} />
-            Gotify Leaderboard
-          </h1>
-          <p className="text-xl text-spotify-lightgray">
-            See who's the best at guessing songs!
-          </p>
-        </div>
-
         {/* Stats Overview */}
         {stats && (
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
@@ -178,7 +157,7 @@ export const Leaderboard: React.FC = () => {
           <button
             onClick={fetchLeaderboard}
             disabled={loading}
-            className="bg-spotify-green text-black font-bold py-2 px-6 rounded-full hover:scale-105 transition-transform flex items-center gap-2 mx-auto disabled:opacity-50"
+            className="bg-spotify-green cursor-pointer text-black font-bold py-2 px-6 rounded-full hover:scale-105 transition-transform flex items-center gap-2 mx-auto disabled:opacity-50"
           >
             <RefreshCw size={20} className={loading ? "animate-spin" : ""} />
             Refresh Leaderboard
@@ -195,7 +174,7 @@ export const Leaderboard: React.FC = () => {
             </p>
             <button
               onClick={() => (window.location.href = "/gotify")}
-              className="bg-spotify-green text-black font-bold py-3 px-8 rounded-full hover:scale-105 transition-transform"
+              className="bg-spotify-green cursor-pointer text-black font-bold py-3 px-8 rounded-full hover:scale-105 transition-transform"
             >
               Play Gotify Now
             </button>
@@ -214,11 +193,10 @@ export const Leaderboard: React.FC = () => {
                   {/* Rank */}
                   <div className="flex items-center justify-center w-12 h-12 mr-4">
                     {getRankIcon(rank)}
-                  </div>
-
+                  </div>{" "}
                   {/* Player Info */}
                   <div className="flex-1">
-                    <div className="font-bold text-lg">{entry.id}</div>
+                    <div className="font-bold text-lg">{entry.player_name}</div>
                     <div
                       className={`text-sm flex items-center gap-1 ${
                         rank <= 3
@@ -230,7 +208,6 @@ export const Leaderboard: React.FC = () => {
                       {formatDate(entry.created_at)}
                     </div>
                   </div>
-
                   {/* Score */}
                   <div className="text-right">
                     <div className="text-2xl font-bold">{entry.score}</div>
@@ -244,7 +221,6 @@ export const Leaderboard: React.FC = () => {
                       points
                     </div>
                   </div>
-
                   {/* Score Bar */}
                   <div className="ml-4 w-24">
                     <div
@@ -288,7 +264,7 @@ export const Leaderboard: React.FC = () => {
               </p>
               <button
                 onClick={() => (window.location.href = "/gotify")}
-                className="bg-spotify-green text-black font-bold py-3 px-8 rounded-full hover:scale-105 transition-transform"
+                className="bg-spotify-green cursor-pointer text-black font-bold py-3 px-8 rounded-full hover:scale-105 transition-transform"
               >
                 Play Gotify
               </button>
