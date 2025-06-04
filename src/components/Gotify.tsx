@@ -104,11 +104,11 @@ export const Gotify: React.FC = () => {
         const maxTurnsNeeded = Math.max(
           ...Object.values(difficultySettings).map((d) => d.maxTurns)
         );
-        const tracksNeeded = Math.min(maxTurnsNeeded + 10, 25); // Max 25 tracks total with 10 track buffer
-
-        // First: Load just the medium term tracks to start quickly
+        const tracksNeeded = Math.min(maxTurnsNeeded + 10, 25); // Max 25 tracks total with 10 track buffer        // First: Load enough medium term tracks to ensure we get 3+ with previews
+        // Load at least 8-10 tracks initially to have a better chance of getting 3+ with preview URLs
+        const initialLoadCount = Math.max(10, Math.ceil(tracksNeeded * 0.4));
         const mediumTerm = await spotifyApi
-          .getTopTracks("medium_term", tracksNeeded * 0.25)
+          .getTopTracks("medium_term", initialLoadCount)
           .catch(() => ({ items: [] }));
 
         if (mediumTerm.items.length > 0) {
@@ -142,15 +142,16 @@ export const Gotify: React.FC = () => {
     };
 
     loadInitialTracks();
-  }, []);
-  // Quick enhancement for initial tracks - only process first 3 to get started fast
-  const enhanceInitialTracksQuickly = async (tracks: SpotifyTrack[]) => {
+  }, []);  const enhanceInitialTracksQuickly = async (tracks: SpotifyTrack[]) => {
     setEnhancingTracks(true);
     try {
-      const tracksToEnhance = tracks.slice(0, 3); // Only enhance first 3 tracks initially
+      // Enhance more tracks initially to ensure we get enough with preview URLs
+      const tracksToEnhance = tracks.slice(0, Math.min(8, tracks.length)); // Enhance up to 8 tracks initially
       const tracksWithoutPreviews = tracksToEnhance.filter(
         (track) => !track.preview_url
       );
+
+      console.log(`🎵 Initial tracks: ${tracks.length}, without previews: ${tracksWithoutPreviews.length}`);
 
       if (tracksWithoutPreviews.length === 0) {
         console.log("Initial tracks already have preview URLs!");
@@ -180,19 +181,19 @@ export const Gotify: React.FC = () => {
           }
         });
 
+        const previewCount = updatedTracks.filter((t) => t.preview_url).length;
+        console.log(`🎉 Initial enhancement complete: ${previewCount}/${updatedTracks.length} tracks ready`);
+
         return {
           ...prev,
           tracks: updatedTracks,
           initialTracksLoaded: true,
         };
       });
-
-      const previewCount = enhancedTracks.filter((t) => t.preview_url).length;
-      console.log(
-        `🎉 Initial enhancement complete: ${previewCount}/${enhancedTracks.length} tracks ready`
-      );
     } catch (error) {
       console.error("Error enhancing initial tracks:", error);
+      // Still mark as loaded even if enhancement fails - user can try to start with existing preview URLs
+      setGameState((prev) => ({ ...prev, initialTracksLoaded: true }));
     } finally {
       setEnhancingTracks(false);
       setEnhancementProgress({ processed: 0, total: 0 });
@@ -258,10 +259,11 @@ export const Gotify: React.FC = () => {
         backgroundLoadingComplete: true,
       }));
     }
-  }; // Enhanced preview URL finding - for remaining tracks in background
+  };  // Enhanced preview URL finding - for remaining tracks in background
   const enhanceRemainingTracksInBackground = async (tracks: SpotifyTrack[]) => {
-    // Skip first 3 tracks as they were already enhanced
-    const remainingTracks = tracks.slice(3);
+    // Skip first 8 tracks as they were already enhanced (or up to tracks.length if less than 8)
+    const skipCount = Math.min(8, tracks.length);
+    const remainingTracks = tracks.slice(skipCount);
     const tracksWithoutPreviews = remainingTracks.filter(
       (track) => !track.preview_url
     );
