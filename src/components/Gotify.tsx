@@ -87,21 +87,28 @@ export const Gotify: React.FC = () => {
     processed: 0,
     total: 0,
   });
-
   // Difficulty settings
   const difficultySettings = {
     easy: { maxTurns: 5, timeLimit: 30, scoreMultiplier: 1, hints: 5 },
     medium: { maxTurns: 10, timeLimit: 20, scoreMultiplier: 1.5, hints: 3 },
     hard: { maxTurns: 15, timeLimit: 15, scoreMultiplier: 2, hints: 1 },
-  }; // Progressive loading - load tracks in stages
+  };
+
+  // Progressive loading - load tracks in stages
   useEffect(() => {
     const loadInitialTracks = async () => {
       try {
         setLoading(true);
 
+        // Calculate how many tracks we actually need (max turns + buffer for missing previews)
+        const maxTurnsNeeded = Math.max(
+          ...Object.values(difficultySettings).map((d) => d.maxTurns)
+        );
+        const tracksNeeded = Math.min(maxTurnsNeeded + 10, 25); // Max 25 tracks total with 10 track buffer
+
         // First: Load just the medium term tracks to start quickly
         const mediumTerm = await spotifyApi
-          .getTopTracks("medium_term", 20)
+          .getTopTracks("medium_term", tracksNeeded * 0.25)
           .catch(() => ({ items: [] }));
 
         if (mediumTerm.items.length > 0) {
@@ -117,8 +124,17 @@ export const Gotify: React.FC = () => {
 
         setLoading(false);
 
-        // Background loading: Get more tracks from other time ranges
-        loadAdditionalTracksInBackground();
+        // Background loading: Get more tracks only if we need them
+        if (mediumTerm.items.length < tracksNeeded) {
+          loadAdditionalTracksInBackground(
+            tracksNeeded - mediumTerm.items.length
+          );
+        } else {
+          setGameState((prev) => ({
+            ...prev,
+            backgroundLoadingComplete: true,
+          }));
+        }
       } catch (error) {
         console.error("Error loading initial tracks:", error);
         setLoading(false);
@@ -127,12 +143,11 @@ export const Gotify: React.FC = () => {
 
     loadInitialTracks();
   }, []);
-
-  // Quick enhancement for initial tracks - only process first 5 to get started fast
+  // Quick enhancement for initial tracks - only process first 3 to get started fast
   const enhanceInitialTracksQuickly = async (tracks: SpotifyTrack[]) => {
     setEnhancingTracks(true);
     try {
-      const tracksToEnhance = tracks.slice(0, 10); // Only enhance first 10 tracks initially
+      const tracksToEnhance = tracks.slice(0, 3); // Only enhance first 3 tracks initially
       const tracksWithoutPreviews = tracksToEnhance.filter(
         (track) => !track.preview_url
       );
@@ -183,15 +198,20 @@ export const Gotify: React.FC = () => {
       setEnhancementProgress({ processed: 0, total: 0 });
     }
   };
-
-  const loadAdditionalTracksInBackground = async () => {
+  const loadAdditionalTracksInBackground = async (additionalNeeded = 20) => {
     try {
-      console.log("🔄 Loading additional tracks in background...");
+      console.log(
+        `🔄 Loading ${additionalNeeded} additional tracks in background...`
+      );
 
-      // Get short and long term tracks
+      // Get short and long term tracks - only what we need
       const [shortTerm, longTerm] = await Promise.all([
-        spotifyApi.getTopTracks("short_term", 20).catch(() => ({ items: [] })),
-        spotifyApi.getTopTracks("long_term", 20).catch(() => ({ items: [] })),
+        spotifyApi
+          .getTopTracks("short_term", Math.ceil(additionalNeeded / 2))
+          .catch(() => ({ items: [] })),
+        spotifyApi
+          .getTopTracks("long_term", Math.ceil(additionalNeeded / 2))
+          .catch(() => ({ items: [] })),
       ]);
 
       // Combine with existing tracks and deduplicate
@@ -206,10 +226,14 @@ export const Gotify: React.FC = () => {
             index === self.findIndex((t) => t.id === track.id)
         );
 
-        const finalTracks = uniqueTracks.slice(0, 50); // Limit to 50 tracks for performance
+        // Calculate how many tracks we actually need (max turns + buffer for missing previews)
+        const maxTurnsNeeded = Math.max(
+          ...Object.values(difficultySettings).map((d) => d.maxTurns)
+        );
+        const finalTracks = uniqueTracks.slice(0, maxTurnsNeeded + 10); // Max needed + 10 buffer
 
         console.log(
-          `📚 Background loading complete: ${finalTracks.length} total tracks`
+          `📚 Background loading complete: ${finalTracks.length} total tracks (optimized for max ${maxTurnsNeeded} turns)`
         );
 
         return {
@@ -236,8 +260,8 @@ export const Gotify: React.FC = () => {
     }
   }; // Enhanced preview URL finding - for remaining tracks in background
   const enhanceRemainingTracksInBackground = async (tracks: SpotifyTrack[]) => {
-    // Skip first 10 tracks as they were already enhanced
-    const remainingTracks = tracks.slice(10);
+    // Skip first 3 tracks as they were already enhanced
+    const remainingTracks = tracks.slice(3);
     const tracksWithoutPreviews = remainingTracks.filter(
       (track) => !track.preview_url
     );
@@ -256,12 +280,11 @@ export const Gotify: React.FC = () => {
         remainingTracks,
         () => {} // No progress updates for background enhancement
       );
-
       setGameState((prev) => {
         const updatedTracks = [...prev.tracks];
         // Update the remaining tracks
         enhancedTracks.forEach((enhancedTrack, index) => {
-          const actualIndex = index + 10; // Offset by 10 since we skipped first 10
+          const actualIndex = index + 3; // Offset by 3 since we skipped first 3
           if (actualIndex < updatedTracks.length) {
             updatedTracks[actualIndex] = enhancedTrack;
           }
@@ -821,7 +844,7 @@ export const Gotify: React.FC = () => {
                       volume: parseFloat(e.target.value),
                     }))
                   }
-                  className="w-32"
+                  className="w-32 cursor-pointer"
                 />
                 <Volume2 size={20} />
                 <span className="text-sm">
