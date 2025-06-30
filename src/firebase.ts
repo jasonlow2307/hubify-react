@@ -2,12 +2,12 @@ import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyD0seK9EWYN1ytqSYpPN9u8925TDF2QNAo",
-  authDomain: "hubify-c2421.firebaseapp.com",
-  projectId: "hubify-c2421",
-  storageBucket: "hubify-c2421.firebasestorage.app",
-  messagingSenderId: "1330535560",
-  appId: "1:1330535560:web:3cdba80beca3912123d33d",
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
 // Initialize Firebase
